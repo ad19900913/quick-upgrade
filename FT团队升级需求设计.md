@@ -4,7 +4,30 @@
 
 ### 升级服务设计思路
 
-计划新建升级专用服务**ft-auto-upgrade**，与现有业务服务（ft-manager、ft-report、ft-openapi）分离，负责管理和执行升级流程。该服务将维护一系列JSON格式的配置文件，每个基线版本对应一个配置文件，描述版本号、升级前中后需要执行的切点、切点执行入口类名、通用/局点特有切点等信息。CICD调用时传入升级前版本号、升级后版本号和局点ID，服务自动收集需要执行的切点类并按顺序执行，记录执行日志，支持断点续执行。
+#### 服务架构设计
+计划新建升级专用服务**ft-auto-upgrade**，与现有业务服务（ft-manager、ft-report、ft-openapi）完全分离。这种设计确保了升级流程的独立性和稳定性，避免对现有业务系统造成影响。
+
+#### 配置文件管理机制
+服务将维护一系列json格式的配置文件，实现版本化的升级流程管理：
+- **版本映射**：每个基线版本（如3.17.5、3.17.6）对应一个独立的配置文件
+- **切点定义**：配置文件详细描述升级前、升级中、升级后需要执行的所有切点
+- **类路径配置**：明确指定每个切点的执行入口类名和方法名
+- **适用范围**：区分通用切点和局点特有切点，支持灵活的局点定制
+
+#### CICD集成调用流程
+服务提供标准化的CICD调用接口，实现自动化升级：
+- **参数输入**：CICD系统传入升级前版本号、升级后版本号和局点ID三个核心参数
+- **切点收集**：服务根据版本范围自动识别和收集需要执行的切点类
+- **顺序执行**：按照配置文件中定义的优先级和依赖关系，有序执行各个切点
+- **状态跟踪**：实时记录每个切点的执行状态、耗时和结果信息
+
+#### 可靠性保障机制
+服务内置多重可靠性保障，确保升级过程的稳定性：
+- **详细日志**：记录升级过程中的每一步操作，包括参数、执行时间、结果状态等
+- **断点续执行**：当升级过程因异常中断时，支持从中断点继续执行，避免重复操作
+- **异常处理**：提供完善的异常捕获和处理机制，确保升级失败时能够及时回滚
+- **监控告警**：集成监控系统，实时监控升级进度和系统状态
+
 
 ### 关键功能点/切点
 
@@ -36,57 +59,100 @@ FT团队需实现以下5个核心CICD切点：
 {
   "version": "2.16.5",
   "description": "FT业务系统2.16.5版本升级配置",
-  "pre_upgrade": [
-    {
-      "id": "pre_business_check",
-      "name": "前置业务检查",
-      "class_name": "com.ft.upgrade.check.PreBusinessCheck",
-      "is_common": true,
-      "description": "升级前业务数据检查"
-    },
-    {
-      "id": "pre_upgrade_process",
-      "name": "前置升级处理",
-      "class_name": "com.ft.upgrade.process.PreUpgradeProcess",
-      "is_common": true,
-      "description": "非停服升级准备操作"
-    }
-  ],
-  "startup_pre_process": [
-    {
-      "id": "startup_pre_process",
-      "name": "启动前处理",
-      "class_name": "com.ft.upgrade.process.StartupPreProcess",
-      "is_common": true,
-      "description": "停服后的主要升级操作"
-    }
-  ],
-  "startup_post_process": [
-    {
-      "id": "startup_post_process",
-      "name": "启动后处理",
-      "class_name": "com.ft.upgrade.process.StartupPostProcess",
-      "is_common": true,
-      "description": "系统启动后的初始化操作"
-    }
-  ],
-  "post_upgrade": [
-    {
-      "id": "post_upgrade_process",
-      "name": "升级后处理",
-      "class_name": "com.ft.upgrade.process.PostUpgradeProcess",
-      "is_common": true,
-      "description": "升级后的持续处理操作"
-    },
-    {
-      "id": "overseas_specific_process",
-      "name": "海外局点特有处理",
-      "class_name": "com.ft.upgrade.process.OverseasSpecificProcess",
-      "is_common": false,
-      "site_ids": ["US", "EU", "JP"],
-      "description": "海外特定局点的特殊处理逻辑"
-    }
-  ]
+  "metadata": {
+    "created_by": "ft-team",
+    "created_time": "2024-01-01T00:00:00Z",
+    "last_modified": "2024-01-01T00:00:00Z",
+    "checksum": "md5hash_value"
+  },
+  "dependencies": {
+    "min_source_version": "2.16.0",
+    "max_source_version": "2.16.4",
+    "required_components": ["ft-manager", "ft-report", "ft-openapi"]
+  },
+  "upgrade_steps": {
+    "pre_business_check": [
+      {
+        "id": "pre_business_check_001",
+        "name": "前置业务检查",
+        "class_name": "com.ft.upgrade.steps.PreBusinessCheckStep",
+        "is_common": true,
+        "description": "升级前业务数据检查",
+        "timeout": 120,
+        "retry_count": 3,
+        "estimated_duration": 120
+      }
+    ],
+    "pre_upgrade_process": [
+      {
+        "id": "pre_upgrade_process_001",
+        "name": "前置升级处理",
+        "class_name": "com.ft.upgrade.steps.PreUpgradeProcessStep",
+        "is_common": true,
+        "description": "非停服升级准备操作",
+        "timeout": 600,
+        "retry_count": 3,
+        "estimated_duration": 600
+      }
+    ],
+    "startup_pre_process": [
+      {
+        "id": "startup_pre_process_001",
+        "name": "启动前处理",
+        "class_name": "com.ft.upgrade.steps.StartupPreProcessStep",
+        "is_common": true,
+        "description": "停服后的主要升级操作",
+        "timeout": 1800,
+        "retry_count": 1,
+        "estimated_duration": 1800
+      }
+    ],
+    "startup_post_process": [
+      {
+        "id": "startup_post_process_001",
+        "name": "启动后处理",
+        "class_name": "com.ft.upgrade.steps.StartupPostProcessStep",
+        "is_common": true,
+        "description": "系统启动后的初始化操作",
+        "timeout": 900,
+        "retry_count": 3,
+        "estimated_duration": 900
+      }
+    ],
+    "post_upgrade": [
+      {
+        "id": "post_upgrade_process_001",
+        "name": "升级后处理",
+        "class_name": "com.ft.upgrade.steps.PostUpgradeProcessStep",
+        "is_common": true,
+        "description": "升级后的持续处理操作",
+        "timeout": 86400,
+        "retry_count": 3,
+        "estimated_duration": 86400
+      },
+      {
+        "id": "overseas_specific_process_001",
+        "name": "海外局点特有处理",
+        "class_name": "com.ft.upgrade.steps.OverseasSpecificProcessStep",
+        "is_common": false,
+        "site_ids": ["US", "EU", "JP"],
+        "description": "海外特定局点的特殊处理逻辑",
+        "timeout": 300,
+        "retry_count": 3,
+        "estimated_duration": 300
+      }
+    ]
+  },
+  "rollback_steps": {
+    "pre_rollback": [
+      {
+        "id": "restore_backup_001",
+        "name": "恢复备份数据",
+        "class_name": "com.ft.upgrade.steps.RestoreBackupStep",
+        "description": "从备份恢复数据"
+      }
+    ]
+  }
 }
 ```
 
@@ -306,22 +372,30 @@ public class StepClassLoader {
 ```
 开始升级
     ↓
-参数验证
+接收CICD调用请求
     ↓
-加载配置文件
+参数验证（升级前版本号、升级后版本号、局点ID、环境信息）
+    ↓
+加载对应版本的配置文件
+    ↓
+解析配置文件，确定需要执行的切点序列
+    ↓
+根据局点ID筛选局点特有切点
     ↓
 创建执行上下文
     ↓
-按阶段执行切点
-    ├─ 前置业务检查
-    ├─ 前置升级处理  
-    ├─ 启动前处理
-    ├─ 启动后处理
-    └─ 升级后处理
+按阶段顺序执行切点
+    ├─ 1. 前置业务检查（pre_business_check）
+    ├─ 2. 前置升级处理（pre_upgrade_process）
+    ├─ 3. 启动前处理（startup_pre_process）
+    ├─ 4. 启动后处理（startup_post_process）
+    └─ 5. 升级后处理（post_upgrade）
+    ↓
+记录执行日志
     ↓
 生成升级报告
     ↓
-结束
+结束（返回执行状态、日志、断点信息、升级报告）
 ```
 
 #### 3.3 日志与报告模块
@@ -370,17 +444,42 @@ public class ExecutionLog {
 @RequestMapping("/api/v1/upgrade")
 public class UpgradeController {
     
+    /**
+     * 执行升级
+     * 接收CICD传入的升级前版本号、升级后版本号、局点ID和环境信息
+     */
     @PostMapping("/execute")
     public ResponseEntity<ExecutionResponse> executeUpgrade(@RequestBody UpgradeRequest request);
     
+    /**
+     * 查询升级执行状态
+     */
     @GetMapping("/status/{executionId}")
     public ResponseEntity<StatusResponse> getStatus(@PathVariable String executionId);
     
+    /**
+     * 断点续执行升级
+     */
     @PostMapping("/resume/{executionId}")
     public ResponseEntity<ExecutionResponse> resumeUpgrade(@PathVariable String executionId);
     
+    /**
+     * 获取升级报告
+     */
     @GetMapping("/report/{executionId}")
     public ResponseEntity<UpgradeReport> getReport(@PathVariable String executionId);
+}
+
+/**
+ * 升级请求参数，与需求设计中的功能输入保持一致
+ */
+public class UpgradeRequest {
+    private String upgradeBeforeVersion;  // 升级前版本号
+    private String upgradeAfterVersion;   // 升级后版本号
+    private String siteId;               // 局点ID
+    private String environment;          // 环境信息（开发/测试/生产）
+    
+    // getters and setters...
 }
 ```
 
