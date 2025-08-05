@@ -54,16 +54,36 @@ FT团队需实现以下5个核心CICD切点：
 | 约束条件   | 1. 配置文件需版本化管理；2. 执行过程需记录详细日志；3. 断点信息需持久化存储；4. 支持水平扩展以应对多局点同时升级。 |
 | 补充说明   | 1. 服务需提供REST API接口供CICD调用；2. 配置文件支持热更新；3. 支持灰度升级和回滚功能。 |
 
-### 配置文件格式示例
+### 版本类型与配置文件设计
+
+#### 版本类型定义
+FT业务系统的版本分为两种类型：
+- **基线版本**：如2.16.5、2.17.0等，包含重大功能变更，需要执行完整的升级流程
+- **补丁版本**：如2.16.5.1、2.16.5.2等，主要包含bug修复和小功能优化，升级流程相对简单
+
+#### 配置文件组织策略
+采用**独立配置文件**策略：
+- **基线版本**：使用完整的配置文件，包含所有5个切点
+- **补丁版本**：使用轻量级配置文件，通常只包含必要的SQL执行切点
+
+**选择独立配置文件的原因**：
+1. **轻量化特性**：补丁版本配置文件更简洁，突出其轻量化特点
+2. **发布独立性**：补丁版本发布不影响基线版本配置，降低风险
+3. **快速识别**：CICD系统可快速识别补丁版本并执行简化流程
+4. **维护便利**：独立配置便于版本管理和问题排查
+
+### 基线版本配置文件示例
 ```json
 {
   "version": "2.16.5",
-  "description": "FT业务系统2.16.5版本升级配置",
+  "version_type": "baseline",
+  "description": "FT业务系统2.16.5基线版本升级配置",
   "metadata": {
     "created_by": "ft-team",
     "created_time": "2024-01-01T00:00:00Z",
     "last_modified": "2024-01-01T00:00:00Z",
-    "checksum": "md5hash_value"
+    "checksum": "md5hash_value",
+    "is_major_upgrade": true
   },
   "dependencies": {
     "min_source_version": "2.16.0",
@@ -155,6 +175,129 @@ FT团队需实现以下5个核心CICD切点：
   }
 }
 ```
+
+### 补丁版本配置文件示例
+```json
+{
+  "version": "2.16.5.1",
+  "version_type": "patch",
+  "base_version": "2.16.5",
+  "description": "FT业务系统2.16.5.1补丁版本升级配置",
+  "metadata": {
+    "created_by": "ft-team",
+    "created_time": "2024-01-15T00:00:00Z",
+    "last_modified": "2024-01-15T00:00:00Z",
+    "checksum": "patch_md5hash_value",
+    "is_major_upgrade": false,
+    "patch_type": "bugfix"
+  },
+  "patch_info": {
+    "fixed_issues": ["BUG-12345", "BUG-12346"],
+    "affected_modules": ["ft-manager", "ft-report"],
+    "risk_level": "low",
+    "rollback_supported": true
+  },
+  "dependencies": {
+    "required_base_version": "2.16.5",
+    "required_components": ["ft-manager", "ft-report"]
+  },
+  "upgrade_steps": {
+    "startup_pre_process": [
+      {
+        "id": "patch_sql_execution_001",
+        "name": "补丁SQL执行",
+        "class_name": "com.ft.upgrade.patch.PatchSqlExecutorStep",
+        "is_common": true,
+        "description": "执行补丁版本的SQL脚本",
+        "timeout": 300,
+        "retry_count": 1,
+        "estimated_duration": 180,
+        "sql_scripts": [
+          "patch/2.16.5.1/001_fix_order_status.sql",
+          "patch/2.16.5.1/002_update_user_permissions.sql"
+        ],
+        "rollback_scripts": [
+          "patch/2.16.5.1/rollback_002_user_permissions.sql",
+          "patch/2.16.5.1/rollback_001_order_status.sql"
+        ]
+      },
+      {
+        "id": "patch_config_update_001",
+        "name": "补丁配置更新",
+        "class_name": "com.ft.upgrade.patch.PatchConfigUpdaterStep",
+        "is_common": true,
+        "description": "更新补丁相关的配置文件",
+        "timeout": 60,
+        "retry_count": 3,
+        "estimated_duration": 30,
+        "config_files": [
+          "application-patch.properties",
+          "logback-patch.xml"
+        ],
+        "required": false
+      }
+    ],
+    "startup_post_process": [
+      {
+        "id": "patch_verification_001",
+        "name": "补丁验证",
+        "class_name": "com.ft.upgrade.patch.PatchVerifierStep",
+        "is_common": true,
+        "description": "验证补丁是否正确应用",
+        "timeout": 120,
+        "retry_count": 2,
+        "estimated_duration": 90,
+        "verification_rules": [
+          "check_table_structure",
+          "check_data_integrity",
+          "check_business_logic"
+        ]
+      }
+    ]
+  },
+  "rollback_steps": {
+    "pre_rollback": [
+      {
+        "id": "patch_rollback_001",
+        "name": "补丁回滚",
+        "class_name": "com.ft.upgrade.patch.PatchRollbackStep",
+        "description": "执行补丁回滚操作",
+        "rollback_scripts": [
+          "patch/2.16.5.1/rollback_002_user_permissions.sql",
+          "patch/2.16.5.1/rollback_001_order_status.sql"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 补丁版本特殊设计说明
+
+#### 1. **版本标识与关联**
+- `version_type`: "patch" - 明确标识为补丁版本
+- `base_version`: "2.16.5" - 指明基于哪个基线版本
+- `patch_type`: "bugfix"/"feature"/"security" - 补丁类型分类
+
+#### 2. **补丁信息管理**
+- `fixed_issues`: 修复的问题列表，便于追踪
+- `affected_modules`: 影响的模块范围，降低风险评估复杂度
+- `risk_level`: 风险等级评估（low/medium/high）
+
+#### 3. **简化的切点配置**
+- **省略切点**：通常省略`pre_business_check`、`pre_upgrade_process`、`post_upgrade`
+- **核心切点**：重点关注`startup_pre_process`（SQL执行）和`startup_post_process`（验证）
+- **执行时间**：大幅缩短超时时间，体现补丁版本的快速特性
+
+#### 4. **SQL脚本管理**
+- `sql_scripts`: 明确列出需要执行的SQL脚本文件路径
+- `rollback_scripts`: 对应的回滚脚本，支持快速回滚
+- **执行顺序**：脚本按数组顺序执行，回滚脚本按逆序执行
+
+#### 5. **增强的回滚支持**
+- 补丁版本通常支持快速回滚
+- 提供专门的回滚切点和脚本
+- 回滚操作轻量化，降低回滚风险
 
 ### 1. 前置业务检查
 | 原因和动机 | 在版本升级前，需确保FT业务数据符合目标版本的要求，避免因脏数据、格式不兼容或业务规则变更导致升级失败或数据异常。 |
