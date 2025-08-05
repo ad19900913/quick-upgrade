@@ -1,0 +1,364 @@
+# Java 编码规范 - 基于阿里巴巴Java开发手册
+
+## 1. 命名规范
+
+### 1.1 类命名
+- 类名使用 UpperCamelCase 风格，必须遵从驼峰形式
+- 抽象类命名使用 Abstract 或 Base 开头
+- 异常类命名使用 Exception 结尾
+- 测试类命名以它要测试的类的名称开始，以 Test 结尾
+
+```java
+// 正确示例
+public class UserService {}
+public class AbstractUserService {}
+public class UserNotFoundException {}
+public class UserServiceTest {}
+```
+
+### 1.2 方法命名
+- 方法名、参数名、成员变量、局部变量都统一使用 lowerCamelCase 风格
+- 获取单个对象的方法用 get 做前缀
+- 获取多个对象的方法用 list 做前缀
+- 获取统计值的方法用 count 做前缀
+- 插入的方法用 save/insert 做前缀
+- 删除的方法用 remove/delete 做前缀
+- 修改的方法用 update 做前缀
+
+```java
+// 正确示例
+public User getUserById(Long id) {}
+public List<User> listUsersByStatus(String status) {}
+public int countUsersByStatus(String status) {}
+public void saveUser(User user) {}
+public void deleteUserById(Long id) {}
+public void updateUser(User user) {}
+```
+
+### 1.3 常量命名
+- 常量命名全部大写，单词间用下划线隔开
+- 力求语义表达完整清楚，不要嫌名字长
+
+```java
+// 正确示例
+public static final String SPRING_CACHE = "hf:hdp:";
+public static final int ACCELERATE_ACCELERATION_CURVE_MAX = 9;
+public static final long INVALID_DATA = -1L;
+```
+
+### 1.4 包命名
+- 包名统一使用小写，点分隔符之间有且仅有一个自然语义的英语单词
+- 包名统一使用单数形式，但是类名如果有复数含义，类名可以使用复数形式
+
+```java
+// 正确示例
+package com.streamax.human.service;
+package com.streamax.human.controller;
+package com.streamax.human.utils;
+```
+
+## 2. 代码格式
+
+### 2.1 缩进
+- 采用 4 个空格缩进，禁止使用 tab 字符
+- 如果是大括号内为空，则简洁地写成 {} 即可，不需要换行
+
+### 2.2 空行
+- 方法体内的执行语句组、变量的定义语句组、不同的业务逻辑之间或者不同的语义之间插入一个空行
+- 相同业务逻辑之间、语义之间不需要插入空行
+
+### 2.3 空格
+- 任何二目、三目运算符的左右两边都需要加一个空格
+- 关键字 if/for/while/switch/do 等与括号之间都必须加空格
+- 方法名与左括号之间不要加空格
+- 左大括号前需要加空格
+
+```java
+// 正确示例
+if (condition) {
+    // do something
+}
+for (int i = 0; i < 10; i++) {
+    // do something
+}
+public void method() {
+    // do something
+}
+```
+
+## 3. 注释规范
+
+### 3.1 类注释
+- 类、类属性、类方法的注释必须使用 Javadoc 规范，使用 /** 内容 */ 格式
+- 所有的抽象方法（包括接口中的方法）必须要用 Javadoc 注释、除了返回值、参数、异常说明外，还必须指出该方法做什么事情，实现什么功能
+
+```java
+/**
+ * 异常驾驶表(AbnormalDriving)表服务接口
+ *
+ * @author wgZhang
+ * @since 2023-05-16 19:54:06
+ */
+public interface IAbnormalDrivingService {
+    
+    /**
+     * 通过ID查询单条数据
+     *
+     * @param startTime 主键
+     * @return 实例对象
+     */
+    AbnormalDrivingDO queryById(Long startTime);
+}
+```
+
+### 3.2 字段注释
+- 字段注释使用 /** 内容 */ 格式，说明该字段的用途
+
+```java
+/**
+ * saas驾驶员ID
+ */
+private Long driverId;
+
+/**
+ * 根组织id
+ */
+private Long topFleetId;
+```
+
+## 4. 编程规约
+
+### 4.1 变量声明
+- 避免在循环中使用字符串拼接，使用 StringBuilder 替代
+- 及时清理不再使用的代码段或配置信息
+- 不要在 foreach 循环里进行元素的 remove/add 操作
+
+### 4.2 集合处理
+- 使用 entrySet 遍历 Map 类集合 KV，而不是 keySet 方式进行遍历
+- 集合初始化时，指定集合初始值大小
+- 使用 Map 的方法 keySet()/values()/entrySet()返回集合对象时，不可以对其进行添加元素操作
+
+```java
+// 正确示例
+Map<String, String> map = new HashMap<>(16);
+for (Map.Entry<String, String> entry : map.entrySet()) {
+    // do something
+}
+```
+
+### 4.3 并发处理
+- 线程资源必须通过线程池提供，不允许在应用中自行显式创建线程
+- 线程池不允许使用 Executors 去创建，而是通过 ThreadPoolExecutor 的方式
+- SimpleDateFormat 是线程不安全的类，一般不要定义为 static 变量，如果定义为 static，必须加锁，或者使用 DateUtils 工具类
+
+### 4.4 控制语句
+- 在一个 switch 块内，每个 case 要么通过 break/return 等来终止，要么注释说明程序将继续执行到哪一个 case 为止
+- 在一个 switch 块内，都必须包含一个 default 语句并且放在最后，即使它什么代码也没有
+
+```java
+// 正确示例
+switch (type) {
+    case "A":
+        // do something
+        break;
+    case "B":
+        // do something
+        break;
+    default:
+        // do something
+        break;
+}
+```
+
+## 5. 异常处理
+
+### 5.1 异常捕获
+- 对大段代码进行 try-catch，这是不负责任的表现
+- 捕获异常是为了处理它，不要捕获了却什么都不处理而抛弃之
+- 有 try 块放到了事务代码中，catch 异常后，如果需要回滚事务，一定要注意手动回滚事务
+
+### 5.2 异常抛出
+- 不能在 finally 块中使用 return，finally 块中的 return 返回后方法结束执行，不会再执行 try 块中的 return 语句
+- 防止 NPE，是程序员的基本修养
+
+## 6. 单元测试
+
+### 6.1 测试命名
+- 测试类命名以它要测试的类的名称开始，以 Test 结尾
+- 测试方法命名应该清晰表达测试的目的
+
+```java
+// 正确示例
+public class UserServiceTest {
+    
+    @Test
+    public void testGetUserById_WhenUserExists_ShouldReturnUser() {
+        // test implementation
+    }
+    
+    @Test
+    public void testGetUserById_WhenUserNotExists_ShouldReturnNull() {
+        // test implementation
+    }
+}
+```
+
+## 7. 项目特定规范
+
+### 7.1 注解使用
+- 使用 Lombok 注解简化代码：@Data, @Slf4j, @RequiredArgsConstructor
+- 使用 Spring 注解：@Service, @Controller, @Repository, @Component
+- 使用配置注解：@Configuration, @ConfigurationProperties
+
+```java
+// 正确示例
+@Slf4j
+@Service
+@RequiredArgsConstructor(onConstructor = @__(@Autowired))
+public class UserServiceImpl implements UserService {
+    
+    private final UserMapper userMapper;
+    
+    @Override
+    public User getUserById(Long id) {
+        return userMapper.selectById(id);
+    }
+}
+```
+
+### 7.2 枚举定义
+- 枚举类名建议带上 Enum 后缀
+- 枚举成员名称全大写，单词间用下划线隔开
+- 为枚举添加详细的注释说明
+
+```java
+/**
+ * 证据标签类型
+ *
+ * @author omc
+ * @date 2023/11/17 16:52
+ */
+@Getter
+public enum LabelTypeEnum {
+    /**
+     * Fatigue label type enum.
+     */
+    FATIGUE(1, 1, null, "疲劳驾驶", "FATIGUE", HF_FATIGUE_GROUP),
+    
+    /**
+     * Distraction label type enum.
+     */
+    DISTRACTION(7, 2, null, "分心驾驶", "DISTRACTION", HF_DISTRACTION_GROUP);
+    
+    private final Integer code;
+    private final Integer riskType;
+    private final String eventCode;
+    private final String desc;
+    private final String behaviorType;
+    private final LabelTypeGroupEnum labelGroup;
+}
+```
+
+### 7.3 工具类
+- 工具类应该是无状态的，所有方法都应该是静态的
+- 工具类应该有私有构造函数防止实例化
+- 工具类方法应该有详细的注释说明
+
+```java
+/**
+ * 画像工具类
+ *
+ * @author yhchen
+ * @date 2023/8/18
+ */
+public class PortraitUtils {
+    
+    private PortraitUtils() {
+        // 私有构造函数防止实例化
+    }
+    
+    /**
+     * 获取百公里次数
+     * 将drivingMile转为千米，再转为百公里 共* 100000
+     *
+     * @param eventCount  事件次数
+     * @param drivingMile 驾驶里程，要求传进来的单位为 m
+     * @param digit       保留位数
+     * @return 百公里次数
+     */
+    public static double getEventCountPer100km(Integer eventCount, Number drivingMile, int digit) {
+        eventCount = eventCount == null ? 0 : eventCount;
+        return HfMathUtils.divisionOperation(eventCount * 100000L, drivingMile, digit);
+    }
+}
+```
+
+### 7.4 配置类
+- 配置类使用 @Configuration 注解
+- 配置属性使用 @ConfigurationProperties 注解
+- 配置类应该有详细的字段注释
+
+```java
+/**
+ * 驾驶员画像配置
+ *
+ * @author twzuo
+ * @createTime 2023/10/12
+ */
+@Data
+@RefreshScope
+@Configuration
+@ConfigurationProperties(prefix = "hf.config")
+public class DriverPortraitConfig implements InitializingBean {
+    
+    /**
+     * djms要求，任务查询接口，需限制任务ID数，最大10。
+     */
+    private Integer queryTaskLimitSize = 10;
+    
+    /**
+     * 一次驾驶行为最短时间 单位s 默认2分钟
+     */
+    private Integer minDuration = 120;
+}
+```
+
+## 8. 性能优化
+
+### 8.1 字符串处理
+- 循环体内，字符串的连接方式，使用 StringBuilder 的 append 方法进行扩展
+- 通过双大括号进行初始化，在生成的字节码中，会包含每个对象的一个引用，而内存可能不足，导致 OOM
+
+### 8.2 集合使用
+- 集合初始化时，指定集合初始值大小
+- 使用 entrySet 遍历 Map 类集合 KV，而不是 keySet 方式进行遍历
+
+### 8.3 数据库操作
+- 在表查询中，一律不要使用 * 作为查询的字段列表，需要哪些字段必须明确写明
+- 在表查询中，不要使用 count(列名)或 count(常量)来替代 count(*)，count(*)就是 SQL92 定义的标准统计行数的语法，跟数据库无关，跟 NULL 和非 NULL 无关
+
+## 9. 安全规范
+
+### 9.1 密码处理
+- 隶属于用户个人的页面或者功能必须进行权限控制校验
+- 用户敏感数据禁止直接展示，必须对展示数据脱敏
+
+### 9.2 输入验证
+- 用户输入的 SQL 语句严格使用参数绑定或者 METADATA 字段值限定，防止 SQL 注入，禁止字符串拼接 SQL 访问数据库
+- 用户请求传入的任何参数必须做有效性验证
+
+## 10. 日志规范
+
+### 10.1 日志级别
+- 应用中不可直接使用日志系统（Log4j、Logback）中的 API，而应依赖使用日志框架 SLF4J 中的 API
+- 日志文件至少保存 15 天，因为有些异常具备以"周"为频次发生的特点
+
+### 10.2 日志内容
+- 日志中不要记录密码、密钥等敏感信息
+- 日志中要记录关键的业务信息，便于问题排查
+
+```java
+// 正确示例
+log.info("System timeZone value: {}", TimeZone.getDefault());
+log.info("-----------------PortraitApplication is starting-----------------");
+```

@@ -1,0 +1,178 @@
+# FT项目开发规范与架构指导
+
+## 项目结构
+
+### 主要目录结构
+- `src/main/java/com/streamax/framework/{projectName}/` - 主要业务代码
+- `src/main/resources/` - 配置文件和资源
+- `src/test/java/` - 测试代码
+- `install/` - 部署和安装脚本
+- `cicd/` - CI/CD配置
+
+### 包结构约定
+```
+com.streamax.framework.{projectName}/
+├── common/           # 公共组件
+│   ├── aspect/      # AOP切面
+│   ├── basic/       # 基础类
+│   ├── config/      # 配置类
+│   ├── constant/    # 常量定义
+│   ├── middleware/  # 中间件
+│   └── util/        # 工具类
+├── domain/          # 业务领域模块
+│   ├── {module}/    # 具体业务模块
+│   │   ├── controller/  # 控制器层
+│   │   ├── service/     # 服务层
+│   │   ├── dao/         # 数据访问层
+│   │   ├── model/       # 数据模型
+│   │   ├── handler/     # 处理器
+│   │   ├── event/       # 事件处理
+│   │   ├── cache/       # 缓存
+│   │   ├── config/      # 模块配置
+│   │   ├── enums/       # 枚举定义
+│   │   └── biz/         # 业务逻辑
+├── customer/        # 客户定制化模块
+└── schedule/        # 定时任务
+```
+
+## 代码风格规范
+
+### 1. 类命名约定
+- **Controller**: `{Module}Controller` - 控制器类
+- **Service**: `{Module}Service` - 服务接口，`{Module}ServiceImpl` - 服务实现
+- **DAO**: `{Module}Dao` - 数据访问接口，`{Module}Mapper` - MyBatis映射器
+- **Model**: `{Module}DO` - 数据库实体，`{Module}DTO` - 数据传输对象，`{Module}Request` - 请求对象，`{Module}Response` - 响应对象
+- **Handler**: `{Module}Handler` - 消息处理器
+- **Config**: `{Module}Config` - 配置类
+- **Enum**: `{Module}Enum` - 枚举类
+
+### 2. 方法命名约定
+- **查询方法**: `query{Entity}`, `get{Entity}`, `find{Entity}`
+- **保存方法**: `save{Entity}`, `insert{Entity}`, `create{Entity}`
+- **更新方法**: `update{Entity}`, `modify{Entity}`
+- **删除方法**: `delete{Entity}`, `remove{Entity}`
+- **批量操作**: `batch{Operation}`
+- **分页查询**: `page{Entity}`, `{Entity}Page`
+
+### 3. 变量命名约定
+- **常量**: `UPPER_SNAKE_CASE` - 全大写蛇形命名
+- **静态常量**: `private static final String CONSTANT_NAME`
+- **成员变量**: `camelCase` - 驼峰命名
+- **局部变量**: `camelCase` - 驼峰命名
+- **布尔变量**: `is{State}`, `has{Property}`, `can{Action}`
+
+## 架构模式
+
+### 1. 分层架构
+```
+Controller Layer (控制器层)
+    ↓
+Service Layer (服务层)
+    ↓
+DAO Layer (数据访问层)
+    ↓
+Database (数据库)
+```
+
+### 2. 模块化设计
+- 每个业务模块独立，包含完整的MVC结构
+- 模块间通过接口进行通信
+- 公共功能抽取到common包
+
+### 3. 事件驱动架构
+- 使用Kafka进行消息传递
+- Handler处理异步消息
+- Event处理业务事件
+
+## 开发规范
+
+### 1. 红线规则 (必须遵守)
+- ❌ **禁止使用BeanUtils.copyProperties** - 性能差，难以排查问题
+- ❌ **禁止直接创建Thread** - 必须使用线程池
+- ❌ **禁止ThreadLocal不清理** - 必须显式调用remove()
+- ❌ **禁止硬编码敏感信息** - 密码、密钥等必须配置化
+- ❌ **禁止Collectors.toMap缺少mergeFunction** - 必须处理重复key
+- ❌ **禁止生产环境使用System.out** - 必须使用日志框架
+
+### 2. 代码质量要求
+- ✅ 使用Lombok简化代码
+- ✅ 使用@Slf4j进行日志记录
+- ✅ 使用@RequiredArgsConstructor进行依赖注入
+- ✅ 使用@Valid进行参数验证
+- ✅ 使用try-with-resources管理资源
+
+### 3. 异常处理规范
+- 使用CustomException进行业务异常处理
+- 异常信息必须包含上下文信息
+- 敏感信息不能出现在异常信息中
+
+### 4. 数据库操作规范
+- 使用MyBatis-Plus进行数据库操作
+- 使用LambdaQueryWrapper避免SQL注入
+- 使用@Param注解进行参数绑定
+- 时间戳字段使用Long类型
+
+## 配置管理
+
+### 1. 配置文件结构
+```
+src/main/resources/
+├── application.yml          # 主配置文件
+├── bootstrap.yml           # 启动配置
+├── mapper/                 # MyBatis映射文件
+├── binding/               # 绑定配置
+└── initialization/        # 初始化配置
+```
+
+### 2. 配置项命名
+- 使用点分隔的层次结构
+- 使用小写字母和下划线
+- 模块前缀: `{module}.{property}`
+
+## 测试规范
+
+### 1. 测试文件位置
+- 单元测试: `src/test/java/` 对应包结构
+- 测试类命名: `{Class}Test`
+- 测试方法命名: `test{MethodName}`
+
+### 2. 测试要求
+- 测试代码不能上生产环境
+- 测试数据不能包含真实敏感信息
+- 使用Mock进行外部依赖模拟
+
+## 部署规范
+
+### 1. 部署脚本
+- 部署脚本位于 `install/` 目录
+- 使用Shell脚本进行自动化部署
+- 配置文件模板化
+
+### 2. 环境配置
+- 开发环境: dev
+- 测试环境: sit
+- 生产环境: prod
+
+## 代码审查检查清单
+
+### 安全检查
+- [ ] 无SQL注入风险
+- [ ] 无硬编码敏感信息
+- [ ] 无线程安全问题
+- [ ] 无资源泄漏风险
+
+### 代码质量检查
+- [ ] 符合命名规范
+- [ ] 无红线违规
+- [ ] 异常处理完整
+- [ ] 日志记录规范
+
+### 架构检查
+- [ ] 分层结构清晰
+- [ ] 模块职责单一
+- [ ] 依赖关系合理
+- [ ] 接口设计规范
+description:
+globs:
+alwaysApply: false
+---

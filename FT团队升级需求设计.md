@@ -1,30 +1,17 @@
 # FT团队升级需求设计
 
-## 背景和目标
+## 整体思路
 
-### 1. 文档核心目的
-- 指导开发：为开发人员提供清晰的升级流程和切点实现指南
-- 需求沟通：作为运维团队与开发团队之间的沟通桥梁，明确升级需求
-- 方案评审：提供评审依据，确保升级方案的合理性和可行性
+### 升级服务设计思路
 
-### 3. 项目背景、业务场景和用户需求
-当前系统升级主要依赖人工操作，存在以下问题：
-- 效率极低：手动执行升级步骤耗时长，无法满足客户快速升级的需求
-- 出错率高：人工操作容易出现遗漏或错误，导致升级失败
-- 人力不足：随着客户数量增加，现有研发人力已无法及时响应所有升级请求
-- 可移交性差：升级过程高度依赖研发团队，难以移交给其他团队或客户自行执行
-
-为解决上述问题，需要对升级流程进行梳理简化和自动化处理，实现升级过程的标准化、自动化和可移交化，满足快速、可靠、无问题的客户安装和升级需求。
-
-### 4. 升级服务设计思路
 计划新建升级专用服务**ft-auto-upgrade**，与现有业务服务（ft-manager、ft-report、ft-openapi）分离，负责管理和执行升级流程。该服务将维护一系列JSON格式的配置文件，每个基线版本对应一个配置文件，描述版本号、升级前中后需要执行的切点、切点执行入口类名、通用/局点特有切点等信息。CICD调用时传入升级前版本号、升级后版本号和局点ID，服务自动收集需要执行的切点类并按顺序执行，记录执行日志，支持断点续执行。
 
-### 2. 关键功能点/切点
+### 关键功能点/切点
 
 FT团队需实现以下5个核心CICD切点：
 - 前置业务检查：确保升级前业务数据符合目标版本要求
 - 前置升级处理：执行不需要停服的升级准备操作
-- 启动前处理：执行最主要的升级处理操作（SQL执行、数据迁移等）
+- 启动前处理：执行最主要的升级处理操作（SQL执行、数据迁移、升级接口调用等）
 - 启动后处理：完成系统启动后的初始化工作
 - 升级后处理：处理升级后需要持续处理的数据
 
@@ -178,125 +165,1277 @@ FT团队需实现以下5个核心CICD切点：
 ### 1. 功能概述
 ft-auto-upgrade服务是一个专门用于FT团队业务系统升级的自动化工具，通过配置文件驱动的方式，实现升级流程的标准化、自动化和可移交化。服务接收CICD传入的版本号和局点ID，自动执行相应的升级切点，并支持断点续执行功能。
 
-### 2. 系统架构
+### 2. 系统架构设计
+
 #### 2.1 整体架构
-- **服务层**：ft-auto-upgrade服务作为独立微服务，与现有业务服务（ft-manager、ft-report、ft-openapi）解耦
-- **配置层**：JSON格式配置文件，按基线版本维护
-- **执行层**：切点执行引擎，负责加载和执行切点类
-- **持久层**：存储执行日志、断点信息和升级报告
-- **API层**：提供REST API接口供CICD调用
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CICD调用层                                │
+├─────────────────────────────────────────────────────────────┤
+│                ft-auto-upgrade服务                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │  API网关层   │  │  配置管理层  │  │  执行引擎层  │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │  日志管理层  │  │  状态管理层  │  │  断点管理层  │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│                    数据持久层                                │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │    MySQL    │  │   MongoDB   │  │    Redis    │         │
+│  │  (元数据)    │  │  (详细日志)  │  │   (缓存)    │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+└─────────────────────────────────────────────────────────────┘
+```
 
 #### 2.2 技术栈选择
-- 开发语言：Java
-- 框架：Spring Boot
-- 数据存储：MySQL（配置文件元数据、执行记录）、MongoDB（详细日志）
-- 消息队列：RabbitMQ（用于异步通知和重试机制）
-- 服务注册与发现：Eureka
+- **开发语言**：Java 11+
+- **框架**：Spring Boot 2.7+, Spring Cloud
+- **数据存储**：
+  - MySQL 8.0+（配置文件元数据、执行记录）
+  - MongoDB 5.0+（详细日志存储）
+  - Redis 6.0+（缓存、分布式锁）
+- **消息队列**：RabbitMQ（异步通知和重试机制）
+- **服务注册与发现**：Nacos
+- **监控**：Prometheus + Grafana
+- **日志**：ELK Stack
 
-### 3. 核心功能模块
+#### 2.3 服务部署架构
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      负载均衡器                              │
+├─────────────────────────────────────────────────────────────┤
+│  ft-auto-upgrade-1  │  ft-auto-upgrade-2  │  ft-auto-upgrade-3 │
+├─────────────────────────────────────────────────────────────┤
+│                    共享数据层                                │
+│     MySQL集群      │     MongoDB集群     │     Redis集群      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 3. 核心功能模块设计
+
 #### 3.1 配置管理模块
-- 配置文件版本控制
+**功能职责**：
+- 配置文件版本控制与管理
 - 配置文件解析与验证
 - 配置文件热更新
 - 局点特有配置管理
 
+**核心类设计**：
+```java
+@Component
+public class ConfigurationManager {
+    // 配置文件加载
+    public UpgradeConfiguration loadConfiguration(String version);
+    
+    // 配置文件验证
+    public ValidationResult validateConfiguration(UpgradeConfiguration config);
+    
+    // 热更新配置
+    public void reloadConfiguration(String version);
+    
+    // 局点配置筛选
+    public List<UpgradeStep> filterBySiteId(String siteId, List<UpgradeStep> steps);
+}
+```
+
+**配置文件结构优化**：
+```json
+{
+  "version": "2.16.5",
+  "description": "FT业务系统2.16.5版本升级配置",
+  "metadata": {
+    "created_by": "system",
+    "created_time": "2024-01-01T00:00:00Z",
+    "last_modified": "2024-01-01T00:00:00Z",
+    "checksum": "md5hash"
+  },
+  "dependencies": {
+    "min_source_version": "2.16.0",
+    "max_source_version": "2.16.4",
+    "required_components": ["ft-manager", "ft-report"]
+  },
+  "upgrade_steps": {
+    "pre_upgrade": [...],
+    "startup_pre_process": [...],
+    "startup_post_process": [...],
+    "post_upgrade": [...]
+  },
+  "rollback_steps": {
+    "pre_rollback": [...],
+    "post_rollback": [...]
+  }
+}
+```
+
 #### 3.2 切点执行模块
-- 切点类加载器
+**功能职责**：
+- 切点类动态加载
 - 切点执行引擎
 - 执行顺序控制
 - 异常处理与断点保存
 
+**核心类设计**：
+```java
+@Service
+public class UpgradeExecutor {
+    // 执行升级
+    public ExecutionResult executeUpgrade(UpgradeRequest request);
+    
+    // 断点续执行
+    public ExecutionResult resumeUpgrade(String executionId);
+    
+    // 执行单个切点
+    private StepResult executeStep(UpgradeStep step, ExecutionContext context);
+    
+    // 保存断点信息
+    private void saveBreakpoint(String executionId, UpgradeStep currentStep);
+}
+
+@Component
+public class StepClassLoader {
+    // 动态加载切点类
+    public Class<?> loadStepClass(String className);
+    
+    // 执行切点方法
+    public Object executeStepMethod(Class<?> clazz, String methodName, Object... args);
+}
+```
+
+**执行流程设计**：
+```
+开始升级
+    ↓
+参数验证
+    ↓
+加载配置文件
+    ↓
+创建执行上下文
+    ↓
+按阶段执行切点
+    ├─ 前置业务检查
+    ├─ 前置升级处理  
+    ├─ 启动前处理
+    ├─ 启动后处理
+    └─ 升级后处理
+    ↓
+生成升级报告
+    ↓
+结束
+```
+
 #### 3.3 日志与报告模块
+**功能职责**：
 - 执行日志记录
 - 升级报告生成
 - 断点信息管理
 - 统计分析与可视化
 
+**核心类设计**：
+```java
+@Service
+public class LoggingService {
+    // 记录执行日志
+    public void logExecution(String executionId, LogLevel level, String message);
+    
+    // 记录切点执行
+    public void logStepExecution(String executionId, String stepId, StepResult result);
+    
+    // 生成执行报告
+    public UpgradeReport generateReport(String executionId);
+}
+
+@Entity
+public class ExecutionLog {
+    private String id;
+    private String executionId;
+    private String stepId;
+    private LogLevel level;
+    private String message;
+    private LocalDateTime timestamp;
+    private Map<String, Object> metadata;
+}
+```
+
 #### 3.4 API模块
+**功能职责**：
 - CICD调用接口
 - 状态查询接口
 - 断点续执行接口
 - 配置管理接口
 
-### 4. 数据模型
-#### 4.1 配置文件模型
-- 版本信息（version、description）
-- 切点集合（pre_upgrade、startup_pre_process、startup_post_process、post_upgrade）
-- 切点属性（id、name、class_name、is_common、site_ids、description）
+**REST API设计**：
+```java
+@RestController
+@RequestMapping("/api/v1/upgrade")
+public class UpgradeController {
+    
+    @PostMapping("/execute")
+    public ResponseEntity<ExecutionResponse> executeUpgrade(@RequestBody UpgradeRequest request);
+    
+    @GetMapping("/status/{executionId}")
+    public ResponseEntity<StatusResponse> getStatus(@PathVariable String executionId);
+    
+    @PostMapping("/resume/{executionId}")
+    public ResponseEntity<ExecutionResponse> resumeUpgrade(@PathVariable String executionId);
+    
+    @GetMapping("/report/{executionId}")
+    public ResponseEntity<UpgradeReport> getReport(@PathVariable String executionId);
+}
+```
 
-#### 4.2 执行记录模型
-- 执行ID、升级前后版本、局点ID
-- 执行状态（进行中/成功/失败）
-- 开始时间、结束时间
-- 断点信息
-- 执行日志关联ID
+### 4. 数据模型设计
 
-#### 4.3 日志模型
-- 日志ID、执行ID
-- 时间戳、日志级别
-- 切点ID、操作描述
-- 异常信息（如有）
+#### 4.1 执行记录模型
+```java
+@Entity
+@Table(name = "upgrade_execution")
+public class UpgradeExecution {
+    @Id
+    private String executionId;
+    private String sourceVersion;
+    private String targetVersion;
+    private String siteId;
+    private String environment;
+    private ExecutionStatus status;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String currentStepId;
+    private String breakpointData;
+    private Integer totalSteps;
+    private Integer completedSteps;
+    private String errorMessage;
+}
+```
 
-### 5. API设计
-#### 5.1 升级执行API
-- URL: /api/v1/upgrade/execute
-- 方法: POST
-- 参数: upgradeBeforeVersion, upgradeAfterVersion, siteId, environment
-- 返回: executionId, status, message
+#### 4.2 切点执行记录模型
+```java
+@Entity
+@Table(name = "step_execution")
+public class StepExecution {
+    @Id
+    private String id;
+    private String executionId;
+    private String stepId;
+    private String stepName;
+    private String stepType;
+    private StepStatus status;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private Long duration;
+    private String result;
+    private String errorMessage;
+    private String metadata;
+}
+```
 
-#### 5.2 执行状态查询API
-- URL: /api/v1/upgrade/status/{executionId}
-- 方法: GET
-- 返回: status, progress, currentStep, message
+#### 4.3 配置文件元数据模型
+```java
+@Entity
+@Table(name = "upgrade_configuration")
+public class UpgradeConfigurationMeta {
+    @Id
+    private String version;
+    private String description;
+    private String configPath;
+    private String checksum;
+    private LocalDateTime createdTime;
+    private LocalDateTime lastModified;
+    private Boolean isActive;
+    private String createdBy;
+}
+```
 
-#### 5.3 断点续执行API
-- URL: /api/v1/upgrade/resume/{executionId}
-- 方法: POST
-- 返回: status, message
+### 5. 关键技术实现
 
-#### 5.4 升级报告API
-- URL: /api/v1/upgrade/report/{executionId}
-- 方法: GET
-- 返回: 升级报告详情
+#### 5.1 配置文件热更新机制
+```java
+@Component
+public class ConfigurationWatcher {
+    
+    @EventListener
+    public void handleConfigurationChange(ConfigurationChangeEvent event) {
+        // 验证新配置
+        ValidationResult result = configurationManager.validateConfiguration(event.getNewConfig());
+        if (result.isValid()) {
+            // 热更新配置
+            configurationManager.reloadConfiguration(event.getVersion());
+            // 通知相关组件
+            applicationEventPublisher.publishEvent(new ConfigurationReloadedEvent(event.getVersion()));
+        }
+    }
+}
+```
 
-### 6. 实现细节
-#### 6.1 配置文件管理
-- 采用Git进行配置文件版本控制
-- 支持配置文件热更新，无需重启服务
-- 配置文件变更自动通知相关模块
+#### 5.2 断点续执行机制
+```java
+@Service
+public class BreakpointManager {
+    
+    public void saveBreakpoint(String executionId, ExecutionContext context) {
+        BreakpointData data = new BreakpointData();
+        data.setExecutionId(executionId);
+        data.setCurrentStepIndex(context.getCurrentStepIndex());
+        data.setExecutionContext(JsonUtils.toJson(context));
+        data.setTimestamp(LocalDateTime.now());
+        
+        breakpointRepository.save(data);
+    }
+    
+    public ExecutionContext restoreBreakpoint(String executionId) {
+        BreakpointData data = breakpointRepository.findByExecutionId(executionId);
+        if (data != null) {
+            return JsonUtils.fromJson(data.getExecutionContext(), ExecutionContext.class);
+        }
+        return null;
+    }
+}
+```
 
-#### 6.2 切点执行流程
-1. 接收升级请求，验证参数合法性
-2. 加载对应版本的配置文件
-3. 解析配置文件，确定切点执行序列
-4. 根据局点ID筛选局点特有切点
-5. 依次执行切点，记录执行日志
-6. 切点执行失败时，保存断点信息，中断执行
-7. 所有切点执行完成，生成升级报告
+#### 5.3 分布式锁机制
+```java
+@Component
+public class DistributedLockManager {
+    
+    @Autowired
+    private RedisTemplate<String, String> redisTemplate;
+    
+    public boolean acquireLock(String lockKey, String lockValue, long expireTime) {
+        Boolean result = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, lockValue, Duration.ofMillis(expireTime));
+        return Boolean.TRUE.equals(result);
+    }
+    
+    public void releaseLock(String lockKey, String lockValue) {
+        String script = "if redis.call('get', KEYS[1]) == ARGV[1] then " +
+                       "return redis.call('del', KEYS[1]) else return 0 end";
+        redisTemplate.execute(new DefaultRedisScript<>(script, Long.class), 
+                             Collections.singletonList(lockKey), lockValue);
+    }
+}
+```
 
-#### 6.3 断点续执行实现
-- 使用数据库持久化断点信息
-- 续执行时从断点处恢复执行上下文
-- 支持手动跳过失败切点
+### 6. 性能优化设计
 
-### 7. 测试策略
-#### 7.1 单元测试
-- 配置解析器测试
-- 切点执行引擎测试
-- 异常处理测试
+#### 6.1 异步执行优化
+```java
+@Service
+public class AsyncUpgradeExecutor {
+    
+    @Async("upgradeExecutorPool")
+    public CompletableFuture<ExecutionResult> executeUpgradeAsync(UpgradeRequest request) {
+        return CompletableFuture.supplyAsync(() -> {
+            return upgradeExecutor.executeUpgrade(request);
+        });
+    }
+    
+    @Bean("upgradeExecutorPool")
+    public TaskExecutor upgradeExecutorPool() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(5);
+        executor.setMaxPoolSize(10);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("upgrade-executor-");
+        executor.initialize();
+        return executor;
+    }
+}
+```
 
-#### 7.2 集成测试
-- 服务与CICD集成测试
-- 多局点升级测试
-- 断点续执行测试
+#### 6.2 缓存优化
+```java
+@Service
+public class CachedConfigurationService {
+    
+    @Cacheable(value = "upgrade-config", key = "#version")
+    public UpgradeConfiguration getConfiguration(String version) {
+        return configurationRepository.findByVersion(version);
+    }
+    
+    @CacheEvict(value = "upgrade-config", key = "#version")
+    public void evictConfiguration(String version) {
+        // 清除缓存
+    }
+}
+```
 
-#### 7.3 性能测试
-- 并发升级测试
-- 大数据量升级测试
-- 服务响应时间测试
+### 7. 监控与告警设计
 
-### 8. 部署方案
-- 容器化部署（Docker + Kubernetes）
-- 多环境部署（开发、测试、生产）
-- 水平扩展支持
-- 健康检查与自动恢复
+#### 7.1 监控指标
+```java
+@Component
+public class UpgradeMetrics {
+    
+    private final MeterRegistry meterRegistry;
+    private final Counter upgradeCounter;
+    private final Timer upgradeTimer;
+    private final Gauge activeUpgrades;
+    
+    public UpgradeMetrics(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+        this.upgradeCounter = Counter.builder("upgrade.executions.total")
+            .description("Total number of upgrade executions")
+            .register(meterRegistry);
+        this.upgradeTimer = Timer.builder("upgrade.execution.duration")
+            .description("Upgrade execution duration")
+            .register(meterRegistry);
+        this.activeUpgrades = Gauge.builder("upgrade.active.count")
+            .description("Number of active upgrades")
+            .register(meterRegistry, this, UpgradeMetrics::getActiveUpgradeCount);
+    }
+    
+    public void recordUpgradeExecution(ExecutionResult result) {
+        upgradeCounter.increment(
+            Tags.of(
+                "status", result.getStatus().name(),
+                "version", result.getTargetVersion()
+            )
+        );
+    }
+}
+```
+
+#### 7.2 告警规则
+```yaml
+# Prometheus告警规则
+groups:
+  - name: ft-auto-upgrade
+    rules:
+      - alert: UpgradeExecutionFailed
+        expr: increase(upgrade_executions_total{status="FAILED"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "升级执行失败"
+          description: "在过去5分钟内有升级执行失败"
+      
+      - alert: UpgradeExecutionTimeout
+        expr: upgrade_execution_duration > 3600
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "升级执行超时"
+          description: "升级执行时间超过1小时"
+```
+
+### 8. 安全设计
+
+#### 8.1 API安全
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .authorizeHttpRequests(authz -> authz
+                .requestMatchers("/api/v1/upgrade/**").hasRole("UPGRADE_ADMIN")
+                .requestMatchers("/actuator/health").permitAll()
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+        return http.build();
+    }
+}
+```
+
+#### 8.2 数据加密
+```java
+@Component
+public class DataEncryption {
+    
+    @Value("${app.encryption.key}")
+    private String encryptionKey;
+    
+    public String encrypt(String data) {
+        // 使用AES加密敏感数据
+        return AESUtil.encrypt(data, encryptionKey);
+    }
+    
+    public String decrypt(String encryptedData) {
+        // 解密数据
+        return AESUtil.decrypt(encryptedData, encryptionKey);
+    }
+}
+```
+
+### 9. 测试策略
+
+#### 9.1 单元测试
+```java
+@ExtendWith(MockitoExtension.class)
+class UpgradeExecutorTest {
+    
+    @Mock
+    private ConfigurationManager configurationManager;
+    
+    @Mock
+    private StepClassLoader stepClassLoader;
+    
+    @InjectMocks
+    private UpgradeExecutor upgradeExecutor;
+    
+    @Test
+    void testExecuteUpgrade_Success() {
+        // 测试升级执行成功场景
+        UpgradeRequest request = createUpgradeRequest();
+        UpgradeConfiguration config = createMockConfiguration();
+        
+        when(configurationManager.loadConfiguration(anyString())).thenReturn(config);
+        
+        ExecutionResult result = upgradeExecutor.executeUpgrade(request);
+        
+        assertThat(result.getStatus()).isEqualTo(ExecutionStatus.SUCCESS);
+    }
+    
+    @Test
+    void testExecuteUpgrade_WithBreakpoint() {
+        // 测试断点续执行场景
+    }
+}
+```
+
+#### 9.2 集成测试
+```java
+@SpringBootTest
+@Testcontainers
+class UpgradeIntegrationTest {
+    
+    @Container
+    static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")
+            .withDatabaseName("ft_upgrade")
+            .withUsername("test")
+            .withPassword("test");
+    
+    @Container
+    static MongoDBContainer mongodb = new MongoDBContainer("mongo:5.0");
+    
+    @Test
+    void testFullUpgradeFlow() {
+        // 测试完整升级流程
+    }
+}
+```
+
+### 10. 部署方案
+
+#### 10.1 Docker化部署
+```dockerfile
+FROM openjdk:11-jre-slim
+
+COPY target/ft-auto-upgrade-*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "/app.jar"]
+```
+
+#### 10.2 Kubernetes部署
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ft-auto-upgrade
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ft-auto-upgrade
+  template:
+    metadata:
+      labels:
+        app: ft-auto-upgrade
+    spec:
+      containers:
+      - name: ft-auto-upgrade
+        image: ft-auto-upgrade:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "prod"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+```
+
+### 11. 运维方案
+
+#### 11.1 健康检查
+```java
+@Component
+public class UpgradeHealthIndicator implements HealthIndicator {
+    
+    @Autowired
+    private DataSource dataSource;
+    
+    @Autowired
+    private ConfigurationManager configurationManager;
+    
+    @Override
+    public Health health() {
+        Health.Builder builder = new Health.Builder();
+        
+        // 检查数据库连接
+        if (!isDatabaseHealthy()) {
+            builder.down().withDetail("database", "MySQL连接失败");
+        }
+        
+        // 检查MongoDB连接
+        if (!isMongoHealthy()) {
+            builder.down().withDetail("mongodb", "MongoDB连接失败");
+        }
+        
+        // 检查Redis连接
+        if (!isRedisHealthy()) {
+            builder.down().withDetail("redis", "Redis连接失败");
+        }
+        
+        // 检查配置文件
+        if (!isConfigurationHealthy()) {
+            builder.down().withDetail("configuration", "配置文件异常");
+        }
+        
+        // 检查磁盘空间
+        long freeSpace = new File("/").getFreeSpace();
+        long totalSpace = new File("/").getTotalSpace();
+        double usagePercent = (double)(totalSpace - freeSpace) / totalSpace * 100;
+        
+        if (usagePercent > 90) {
+            builder.down().withDetail("disk", "磁盘使用率超过90%");
+        }
+        
+        return builder.up()
+            .withDetail("database", "正常")
+            .withDetail("mongodb", "正常")
+            .withDetail("redis", "正常")
+            .withDetail("configuration", "正常")
+            .withDetail("disk_usage", String.format("%.2f%%", usagePercent))
+            .build();
+    }
+    
+    private boolean isDatabaseHealthy() {
+        try (Connection connection = dataSource.getConnection()) {
+            return connection.isValid(5);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    private boolean isMongoHealthy() {
+        // MongoDB健康检查实现
+        return true;
+    }
+    
+    private boolean isRedisHealthy() {
+        // Redis健康检查实现
+        return true;
+    }
+    
+    private boolean isConfigurationHealthy() {
+        try {
+            configurationManager.validateAllConfigurations();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+}
+```
+
+#### 11.2 日志配置
+```yaml
+logging:
+  level:
+    com.ft.upgrade: DEBUG
+    org.springframework: INFO
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
+  file:
+    name: logs/ft-auto-upgrade.log
+    max-size: 100MB
+    max-history: 30
+    total-size-cap: 1GB
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB
+      max-history: 30
+      total-size-cap: 1GB
+```
+
+#### 11.3 配置管理
+```yaml
+# application.yml
+server:
+  port: 8080
+  servlet:
+    context-path: /ft-auto-upgrade
+
+spring:
+  application:
+    name: ft-auto-upgrade
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:ft_upgrade}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  data:
+    mongodb:
+      uri: mongodb://${MONGO_HOST:localhost}:${MONGO_PORT:27017}/${MONGO_DB:ft_upgrade_logs}
+  
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    database: ${REDIS_DB:0}
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 5
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+
+# 自定义配置
+ft:
+  upgrade:
+    config:
+      base-path: ${CONFIG_BASE_PATH:/opt/ft-upgrade/config}
+      reload-interval: 60s
+    execution:
+      max-concurrent: ${MAX_CONCURRENT:5}
+      timeout: ${EXECUTION_TIMEOUT:3600s}
+      retry-count: ${RETRY_COUNT:3}
+    storage:
+      log-retention-days: ${LOG_RETENTION_DAYS:30}
+      report-retention-days: ${REPORT_RETENTION_DAYS:90}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+```
+
+### 12. 错误处理与异常管理
+
+#### 12.1 全局异常处理
+```java
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    
+    @ExceptionHandler(UpgradeExecutionException.class)
+    public ResponseEntity<ErrorResponse> handleUpgradeExecutionException(UpgradeExecutionException e) {
+        logger.error("升级执行异常", e);
+        ErrorResponse error = ErrorResponse.builder()
+            .code("UPGRADE_EXECUTION_ERROR")
+            .message(e.getMessage())
+            .timestamp(LocalDateTime.now())
+            .build();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+    
+    @ExceptionHandler(ConfigurationNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleConfigurationNotFoundException(ConfigurationNotFoundException e) {
+        logger.error("配置文件未找到", e);
+        ErrorResponse error = ErrorResponse.builder()
+            .code("CONFIGURATION_NOT_FOUND")
+            .message(e.getMessage())
+            .timestamp(LocalDateTime.now())
+            .build();
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+    }
+    
+    @ExceptionHandler(ValidationException.class)
+    public ResponseEntity<ErrorResponse> handleValidationException(ValidationException e) {
+        logger.error("参数验证失败", e);
+        ErrorResponse error = ErrorResponse.builder()
+            .code("VALIDATION_ERROR")
+            .message(e.getMessage())
+            .timestamp(LocalDateTime.now())
+            .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+    
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGenericException(Exception e) {
+        logger.error("系统异常", e);
+        ErrorResponse error = ErrorResponse.builder()
+            .code("INTERNAL_SERVER_ERROR")
+            .message("系统内部错误，请联系管理员")
+            .timestamp(LocalDateTime.now())
+            .build();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+}
+```
+
+#### 12.2 自定义异常类
+```java
+public class UpgradeExecutionException extends RuntimeException {
+    private final String executionId;
+    private final String stepId;
+    
+    public UpgradeExecutionException(String executionId, String stepId, String message) {
+        super(message);
+        this.executionId = executionId;
+        this.stepId = stepId;
+    }
+    
+    public UpgradeExecutionException(String executionId, String stepId, String message, Throwable cause) {
+        super(message, cause);
+        this.executionId = executionId;
+        this.stepId = stepId;
+    }
+}
+
+public class ConfigurationNotFoundException extends RuntimeException {
+    public ConfigurationNotFoundException(String version) {
+        super("配置文件未找到: " + version);
+    }
+}
+
+public class ValidationException extends RuntimeException {
+    public ValidationException(String message) {
+        super(message);
+    }
+}
+```
+
+### 13. 数据备份与恢复策略
+
+#### 13.1 数据备份服务
+```java
+@Service
+public class BackupService {
+    
+    private static final Logger logger = LoggerFactory.getLogger(BackupService.class);
+    
+    @Autowired
+    private DataSource dataSource;
+    
+    @Value("${ft.upgrade.backup.path}")
+    private String backupPath;
+    
+    public BackupResult createBackup(String executionId, List<String> tables) {
+        String backupDir = backupPath + "/" + executionId;
+        File dir = new File(backupDir);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        
+        BackupResult result = new BackupResult();
+        result.setExecutionId(executionId);
+        result.setBackupPath(backupDir);
+        result.setStartTime(LocalDateTime.now());
+        
+        try {
+            for (String table : tables) {
+                backupTable(table, backupDir);
+                result.addBackupTable(table);
+            }
+            result.setStatus(BackupStatus.SUCCESS);
+            result.setEndTime(LocalDateTime.now());
+            logger.info("备份完成: executionId={}, tables={}", executionId, tables);
+        } catch (Exception e) {
+            result.setStatus(BackupStatus.FAILED);
+            result.setErrorMessage(e.getMessage());
+            result.setEndTime(LocalDateTime.now());
+            logger.error("备份失败: executionId=" + executionId, e);
+        }
+        
+        return result;
+    }
+    
+    private void backupTable(String tableName, String backupDir) throws Exception {
+        String backupFile = backupDir + "/" + tableName + "_" + 
+                           LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".sql";
+        
+        String command = String.format(
+            "mysqldump -h%s -P%s -u%s -p%s %s %s > %s",
+            getDbHost(), getDbPort(), getDbUsername(), getDbPassword(),
+            getDbName(), tableName, backupFile
+        );
+        
+        Process process = Runtime.getRuntime().exec(command);
+        int exitCode = process.waitFor();
+        
+        if (exitCode != 0) {
+            throw new RuntimeException("备份表失败: " + tableName + ", 退出码: " + exitCode);
+        }
+    }
+    
+    public RestoreResult restoreBackup(String executionId) {
+        String backupDir = backupPath + "/" + executionId;
+        RestoreResult result = new RestoreResult();
+        result.setExecutionId(executionId);
+        result.setStartTime(LocalDateTime.now());
+        
+        try {
+            File dir = new File(backupDir);
+            if (!dir.exists()) {
+                throw new RuntimeException("备份目录不存在: " + backupDir);
+            }
+            
+            File[] backupFiles = dir.listFiles((d, name) -> name.endsWith(".sql"));
+            if (backupFiles == null || backupFiles.length == 0) {
+                throw new RuntimeException("备份文件不存在");
+            }
+            
+            for (File backupFile : backupFiles) {
+                restoreFromFile(backupFile);
+                result.addRestoredTable(extractTableName(backupFile.getName()));
+            }
+            
+            result.setStatus(RestoreStatus.SUCCESS);
+            result.setEndTime(LocalDateTime.now());
+            logger.info("恢复完成: executionId={}", executionId);
+        } catch (Exception e) {
+            result.setStatus(RestoreStatus.FAILED);
+            result.setErrorMessage(e.getMessage());
+            result.setEndTime(LocalDateTime.now());
+            logger.error("恢复失败: executionId=" + executionId, e);
+        }
+        
+        return result;
+    }
+}
+```
+
+### 14. 切点实现规范
+
+#### 14.1 切点接口定义
+```java
+public interface UpgradeStep {
+    
+    /**
+     * 执行升级步骤
+     * @param context 执行上下文
+     * @return 执行结果
+     */
+    StepResult execute(ExecutionContext context);
+    
+    /**
+     * 验证步骤前置条件
+     * @param context 执行上下文
+     * @return 验证结果
+     */
+    ValidationResult validate(ExecutionContext context);
+    
+    /**
+     * 获取步骤描述
+     * @return 步骤描述
+     */
+    String getDescription();
+    
+    /**
+     * 获取预估执行时间（秒）
+     * @param context 执行上下文
+     * @return 预估时间
+     */
+    long getEstimatedDuration(ExecutionContext context);
+    
+    /**
+     * 是否支持回滚
+     * @return true表示支持回滚
+     */
+    boolean isRollbackSupported();
+    
+    /**
+     * 执行回滚操作
+     * @param context 执行上下文
+     * @return 回滚结果
+     */
+    default StepResult rollback(ExecutionContext context) {
+        throw new UnsupportedOperationException("该步骤不支持回滚");
+    }
+}
+```
+
+#### 14.2 抽象基类实现
+```java
+public abstract class AbstractUpgradeStep implements UpgradeStep {
+    
+    protected final Logger logger = LoggerFactory.getLogger(getClass());
+    
+    @Override
+    public final StepResult execute(ExecutionContext context) {
+        String stepId = context.getCurrentStep().getId();
+        logger.info("开始执行升级步骤: {}", stepId);
+        
+        StepResult result = new StepResult();
+        result.setStepId(stepId);
+        result.setStartTime(LocalDateTime.now());
+        
+        try {
+            // 前置验证
+            ValidationResult validation = validate(context);
+            if (!validation.isValid()) {
+                result.setStatus(StepStatus.FAILED);
+                result.setErrorMessage("前置验证失败: " + validation.getErrorMessage());
+                return result;
+            }
+            
+            // 执行具体逻辑
+            doExecute(context, result);
+            
+            if (result.getStatus() == null) {
+                result.setStatus(StepStatus.SUCCESS);
+            }
+            
+            logger.info("升级步骤执行完成: {}, 状态: {}", stepId, result.getStatus());
+            
+        } catch (Exception e) {
+            logger.error("升级步骤执行失败: " + stepId, e);
+            result.setStatus(StepStatus.FAILED);
+            result.setErrorMessage(e.getMessage());
+        } finally {
+            result.setEndTime(LocalDateTime.now());
+            result.setDuration(Duration.between(result.getStartTime(), result.getEndTime()).toMillis());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 子类实现具体的执行逻辑
+     */
+    protected abstract void doExecute(ExecutionContext context, StepResult result) throws Exception;
+    
+    @Override
+    public ValidationResult validate(ExecutionContext context) {
+        return ValidationResult.success();
+    }
+    
+    @Override
+    public long getEstimatedDuration(ExecutionContext context) {
+        return 60; // 默认1分钟
+    }
+    
+    @Override
+    public boolean isRollbackSupported() {
+        return false;
+    }
+}
+```
+
+#### 14.3 具体切点实现示例
+```java
+@Component
+public class PreBusinessCheckStep extends AbstractUpgradeStep {
+    
+    @Autowired
+    private DataQualityChecker dataQualityChecker;
+    
+    @Override
+    protected void doExecute(ExecutionContext context, StepResult result) throws Exception {
+        String sourceVersion = context.getSourceVersion();
+        String targetVersion = context.getTargetVersion();
+        
+        logger.info("执行前置业务检查: {} -> {}", sourceVersion, targetVersion);
+        
+        // 执行数据质量检查
+        DataQualityResult qualityResult = dataQualityChecker.checkDataQuality(
+            sourceVersion, targetVersion, context.getEnvironmentInfo()
+        );
+        
+        if (!qualityResult.isPassed()) {
+            result.setStatus(StepStatus.FAILED);
+            result.setErrorMessage("数据质量检查失败: " + qualityResult.getErrorMessage());
+            result.setMetadata(Map.of("qualityResult", qualityResult));
+            return;
+        }
+        
+        result.setMetadata(Map.of(
+            "checkedTables", qualityResult.getCheckedTables(),
+            "totalRecords", qualityResult.getTotalRecords(),
+            "errorRecords", qualityResult.getErrorRecords()
+        ));
+        
+        logger.info("前置业务检查完成，检查表数: {}, 总记录数: {}, 错误记录数: {}", 
+                   qualityResult.getCheckedTables().size(),
+                   qualityResult.getTotalRecords(),
+                   qualityResult.getErrorRecords());
+    }
+    
+    @Override
+    public String getDescription() {
+        return "执行升级前的业务数据质量检查";
+    }
+    
+    @Override
+    public long getEstimatedDuration(ExecutionContext context) {
+        // 根据数据量估算时间
+        return 120; // 2分钟
+    }
+    
+    @Override
+    public ValidationResult validate(ExecutionContext context) {
+        if (context.getSourceVersion() == null || context.getTargetVersion() == null) {
+            return ValidationResult.failed("源版本或目标版本不能为空");
+        }
+        return ValidationResult.success();
+    }
+}
+```
+
+### 15. 最佳实践与开发规范
+
+#### 15.1 代码规范
+```java
+/**
+ * 升级切点开发规范
+ * 
+ * 1. 命名规范：
+ *    - 类名：以Step结尾，如PreBusinessCheckStep
+ *    - 方法名：使用驼峰命名，动词开头
+ *    - 变量名：使用驼峰命名，名词性
+ * 
+ * 2. 日志规范：
+ *    - 使用SLF4J Logger
+ *    - 关键操作必须记录日志
+ *    - 异常必须记录ERROR级别日志
+ * 
+ * 3. 异常处理：
+ *    - 不要吞噬异常
+ *    - 使用具体的异常类型
+ *    - 提供有意义的错误信息
+ * 
+ * 4. 资源管理：
+ *    - 使用try-with-resources管理资源
+ *    - 及时释放数据库连接
+ *    - 清理临时文件
+ * 
+ * 5. 性能考虑：
+ *    - 避免在循环中执行数据库操作
+ *    - 使用批量操作
+ *    - 合理使用缓存
+ */
+```
+
+#### 15.2 配置文件最佳实践
+```json
+{
+  "version": "2.16.5",
+  "description": "FT业务系统2.16.5版本升级配置",
+  "metadata": {
+    "created_by": "system",
+    "created_time": "2024-01-01T00:00:00Z",
+    "last_modified": "2024-01-01T00:00:00Z",
+    "checksum": "md5hash",
+    "tags": ["major", "database-change", "breaking-change"]
+  },
+  "dependencies": {
+    "min_source_version": "2.16.0",
+    "max_source_version": "2.16.4",
+    "required_components": ["ft-manager", "ft-report"],
+    "required_resources": {
+      "memory": "2GB",
+      "disk": "10GB",
+      "cpu": "2cores"
+    }
+  },
+  "upgrade_steps": {
+    "pre_upgrade": [
+      {
+        "id": "pre_business_check",
+        "name": "前置业务检查",
+        "class_name": "com.ft.upgrade.steps.PreBusinessCheckStep",
+        "is_common": true,
+        "description": "升级前业务数据检查",
+        "timeout": 300,
+        "retry_count": 3,
+        "dependencies": [],
+        "rollback_supported": false,
+        "estimated_duration": 120,
+        "site_specific": false
+      }
+    ]
+  },
+  "rollback_steps": {
+    "pre_rollback": [
+      {
+        "id": "restore_backup",
+        "name": "恢复备份数据",
+        "class_name": "com.ft.upgrade.steps.RestoreBackupStep",
+        "description": "从备份恢复数据"
+      }
+    ]
+  },
+  "notifications": {
+    "on_success": ["admin@company.com"],
+    "on_failure": ["admin@company.com", "dev-team@company.com"],
+    "webhook_url": "https://hooks.company.com/upgrade-notification"
+  }
+}
+```
+
+#### 15.3 开发流程规范
+```markdown
+## 升级切点开发流程
+
+### 1. 需求分析
+- 明确升级步骤的具体功能
+- 确定输入输出参数
+- 评估执行时间和资源需求
+
+### 2. 设计阶段
+- 继承AbstractUpgradeStep基类
+- 实现必要的接口方法
+- 设计异常处理策略
+
+### 3. 开发阶段
+- 编写核心业务逻辑
+- 添加详细的日志记录
+- 实现参数验证
+
+### 4. 测试阶段
+- 编写单元测试
+- 进行集成测试
+- 性能测试
+
+### 5. 部署阶段
+- 更新配置文件
+- 部署到测试环境
+- 验证功能正确性
+
+### 6. 文档更新
+- 更新API文档
+- 更新操作手册
+- 记录已知问题
+```
