@@ -1,0 +1,123 @@
+graph TB
+    subgraph "CICD流水线"
+        A[开始升级流程] --> B[代码构建打包]
+        B --> C[部署新版本组件]
+        C --> D[触发前置业务检查]
+        D --> E[触发前置升级处理]
+        E --> F[停服维护]
+        F --> G[触发启动前处理]
+        G --> H[启动各组件服务]
+        H --> I[触发启动后处理]
+        I --> J[开放南向接口]
+        J --> K[触发升级后处理]
+        K --> L[升级完成]
+    end
+
+    subgraph "FT升级服务内部执行流程"
+        subgraph "前置业务检查阶段"
+            D1[接收CICD请求] --> D2[参数验证]
+            D2 --> D3[加载配置文件]
+            D3 --> D4[执行数据质量检查]
+            D4 --> D5[执行中间件版本检查]
+            D5 --> D6[执行部署架构检查]
+            D6 --> D7[生成检查报告]
+            D7 --> D8[返回检查结果]
+        end
+
+        subgraph "前置升级处理阶段"
+            E1[接收CICD请求] --> E2[执行数据备份]
+            E2 --> E3[预处理配置文件]
+            E3 --> E4[检查服务状态]
+            E4 --> E5[准备停服升级]
+            E5 --> E6[返回处理结果]
+        end
+
+        subgraph "启动前处理阶段"
+            G1[接收CICD请求] --> G2[初始化多数据库连接]
+            G2 --> G3[解析SQL脚本文件]
+            G3 --> G4[检查断点续执行]
+            G4 --> G5{是否有断点?}
+            G5 -->|是| G6[从断点位置开始]
+            G5 -->|否| G7[从头开始执行]
+            G6 --> G8[逐条执行SQL语句]
+            G7 --> G8
+            G8 --> G9{SQL执行成功?}
+            G9 -->|是| G10[记录执行日志]
+            G9 -->|否| G11[保存断点信息]
+            G10 --> G12{还有SQL?}
+            G11 --> G13[中断流程并通知]
+            G12 -->|是| G8
+            G12 -->|否| G14[数据完整性验证]
+            G14 --> G15[生成执行报告]
+            G15 --> G16[返回处理结果]
+        end
+
+        subgraph "启动后处理阶段"
+            I1[接收CICD请求] --> I2[导入资源包]
+            I2 --> I3[重建缓存]
+            I3 --> I4[优化索引]
+            I4 --> I5[服务健康检查]
+            I5 --> I6[验证系统功能]
+            I6 --> I7[返回处理结果]
+        end
+
+        subgraph "升级后处理阶段"
+            K1[接收CICD请求] --> K2[执行数据异步迁移]
+            K2 --> K3[清理冗余日志]
+            K3 --> K4[优化系统性能]
+            K4 --> K5[释放系统资源]
+            K5 --> K6[返回处理结果]
+        end
+    end
+
+    subgraph "数据存储层"
+        DB1[(MySQL/MariaDB<br/>元数据存储)]
+        DB2[(ClickHouse<br/>日志存储)]
+        DB3[(Redis<br/>缓存存储)]
+    end
+
+    subgraph "断点续执行机制"
+        BP1[检测到执行失败] --> BP2[保存断点信息]
+        BP2 --> BP3[记录失败位置]
+        BP3 --> BP4[人工处理问题]
+        BP4 --> BP5[调用续执行接口]
+        BP5 --> BP6[从断点位置继续]
+    end
+
+    %% CICD与FT升级服务的交互
+    D --> D1
+    E --> E1
+    G --> G1
+    I --> I1
+    K --> K1
+
+    %% 返回结果给CICD
+    D8 --> D
+    E6 --> E
+    G16 --> G
+    I7 --> I
+    K6 --> K
+
+    %% 数据存储交互
+    D7 --> DB1
+    E5 --> DB1
+    G10 --> DB1
+    G10 --> DB2
+    G11 --> DB1
+    I6 --> DB1
+    K5 --> DB1
+
+    %% 断点续执行流程
+    G11 --> BP1
+    BP6 --> G6
+
+    %% 样式定义
+    classDef cicdStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef ftServiceStyle fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef dbStyle fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef breakpointStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+
+    class A,B,C,D,E,F,G,H,I,J,K,L cicdStyle
+    class D1,D2,D3,D4,D5,D6,D7,D8,E1,E2,E3,E4,E5,E6,G1,G2,G3,G4,G5,G6,G7,G8,G9,G10,G11,G12,G13,G14,G15,G16,I1,I2,I3,I4,I5,I6,I7,K1,K2,K3,K4,K5,K6 ftServiceStyle
+    class DB1,DB2,DB3 dbStyle
+    class BP1,BP2,BP3,BP4,BP5,BP6 breakpointStyle

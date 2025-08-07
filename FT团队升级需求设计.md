@@ -4,6 +4,134 @@
 
 新建升级专用服务**ft-auto-upgrade**，并实现CICD定义的多种升级切点；与现有业务服务（ft-manager、ft-report、ft-openapi）完全分离。这种设计确保了升级流程的独立性和稳定性，避免对现有业务系统造成影响。
 
+### CICD与FT升级服务交互流程图
+
+```mermaid
+graph TB
+    subgraph "CICD流水线"
+        A[开始升级流程] --> B[代码构建打包]
+        B --> C[部署新版本组件]
+        C --> D[触发前置业务检查]
+        D --> E[触发前置升级处理]
+        E --> F[停服维护]
+        F --> G[触发启动前处理]
+        G --> H[启动各组件服务]
+        H --> I[触发启动后处理]
+        I --> J[开放南向接口]
+        J --> K[触发升级后处理]
+        K --> L[升级完成]
+    end
+
+    subgraph "FT升级服务内部执行流程"
+        subgraph "前置业务检查阶段"
+            D1[接收CICD请求] --> D2[参数验证]
+            D2 --> D3[加载配置文件]
+            D3 --> D4[执行数据质量检查]
+            D4 --> D5[执行中间件版本检查]
+            D5 --> D6[执行部署架构检查]
+            D6 --> D7[生成检查报告]
+            D7 --> D8[返回检查结果]
+        end
+
+        subgraph "前置升级处理阶段"
+            E1[接收CICD请求] --> E2[执行数据备份]
+            E2 --> E3[预处理配置文件]
+            E3 --> E4[检查服务状态]
+            E4 --> E5[准备停服升级]
+            E5 --> E6[返回处理结果]
+        end
+
+        subgraph "启动前处理阶段"
+            G1[接收CICD请求] --> G2[初始化多数据库连接]
+            G2 --> G3[解析SQL脚本文件]
+            G3 --> G4[检查断点续执行]
+            G4 --> G5{是否有断点?}
+            G5 -->|是| G6[从断点位置开始]
+            G5 -->|否| G7[从头开始执行]
+            G6 --> G8[逐条执行SQL语句]
+            G7 --> G8
+            G8 --> G9{SQL执行成功?}
+            G9 -->|是| G10[记录执行日志]
+            G9 -->|否| G11[保存断点信息]
+            G10 --> G12{还有SQL?}
+            G11 --> G13[中断流程并通知]
+            G12 -->|是| G8
+            G12 -->|否| G14[数据完整性验证]
+            G14 --> G15[生成执行报告]
+            G15 --> G16[返回处理结果]
+        end
+
+        subgraph "启动后处理阶段"
+            I1[接收CICD请求] --> I2[导入资源包]
+            I2 --> I3[重建缓存]
+            I3 --> I4[优化索引]
+            I4 --> I5[服务健康检查]
+            I5 --> I6[验证系统功能]
+            I6 --> I7[返回处理结果]
+        end
+
+        subgraph "升级后处理阶段"
+            K1[接收CICD请求] --> K2[执行数据异步迁移]
+            K2 --> K3[清理冗余日志]
+            K3 --> K4[优化系统性能]
+            K4 --> K5[释放系统资源]
+            K5 --> K6[返回处理结果]
+        end
+    end
+
+    subgraph "数据存储层"
+        DB1[(MySQL/MariaDB<br/>元数据存储)]
+        DB2[(ClickHouse<br/>日志存储)]
+        DB3[(Redis<br/>缓存存储)]
+    end
+
+    subgraph "断点续执行机制"
+        BP1[检测到执行失败] --> BP2[保存断点信息]
+        BP2 --> BP3[记录失败位置]
+        BP3 --> BP4[人工处理问题]
+        BP4 --> BP5[调用续执行接口]
+        BP5 --> BP6[从断点位置继续]
+    end
+
+    %% CICD与FT升级服务的交互
+    D --> D1
+    E --> E1
+    G --> G1
+    I --> I1
+    K --> K1
+
+    %% 返回结果给CICD
+    D8 --> D
+    E6 --> E
+    G16 --> G
+    I7 --> I
+    K6 --> K
+
+    %% 数据存储交互
+    D7 --> DB1
+    E5 --> DB1
+    G10 --> DB1
+    G10 --> DB2
+    G11 --> DB1
+    I6 --> DB1
+    K5 --> DB1
+
+    %% 断点续执行流程
+    G11 --> BP1
+    BP6 --> G6
+
+    %% 样式定义
+    classDef cicdStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef ftServiceStyle fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef dbStyle fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef breakpointStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+
+    class A,B,C,D,E,F,G,H,I,J,K,L cicdStyle
+    class D1,D2,D3,D4,D5,D6,D7,D8,E1,E2,E3,E4,E5,E6,G1,G2,G3,G4,G5,G6,G7,G8,G9,G10,G11,G12,G13,G14,G15,G16,I1,I2,I3,I4,I5,I6,I7,K1,K2,K3,K4,K5,K6 ftServiceStyle
+    class DB1,DB2,DB3 dbStyle
+    class BP1,BP2,BP3,BP4,BP5,BP6 breakpointStyle
+```
+
 ### 配置文件管理
 **ft-auto-upgrade**服务将维护一系列json格式的配置文件，实现版本化的升级流程管理：
 
@@ -199,6 +327,7 @@ FT团队需实现以下5个核心CICD切点：
 ## 章节一：需求设计
 
 ### 0. ft-auto-upgrade服务
+
 | 原因和动机 | 为实现升级流程的标准化、自动化和可移交化，解决人工升级效率低、出错率高、人力不足等问题。 |
 | ---------- | ------------------------------------------------------------ |
 | 功能描述   | 新建升级专用服务ft-auto-upgrade，与现有业务服务（ft-manager、ft-report、ft-openapi）分离，负责管理和执行升级流程。<br/>服务维护JSON格式的配置文件，每个基线版本对应一个配置文件，描述版本号、升级前中后需要执行的切点、切点执行入口类名、通用/局点特有切点等信息。 |
@@ -213,10 +342,11 @@ FT团队需实现以下5个核心CICD切点：
 | 补充说明   | 1. 服务需提供REST API接口供CICD调用；<br/>2. 配置文件支持热更新； |
 
 ### 1. 前置业务检查
+
 | 原因和动机 | 在版本升级前，需确保FT业务数据和系统环境符合目标版本的要求，避免因环境不兼容、架构缺陷或脏数据导致升级失败或数据异常。 |
 | ---------- | ------------------------------------------------------------ |
 | 功能描述   | 1. 版本适用性检查：a) 支持配置版本范围（如 3.17.5~3.17.9），仅当升级源版本或目标版本在范围内时执行检查。<br/>2. 中间件版本检查：a) 检查MySQL、Redis、ZooKeeper等中间件版本是否满足目标版本要求；<br/>3. 部署架构检查：a) 例如验证ZooKeeper是否有独立磁盘挂载；b) 例如检查kafka分区数、副本数是否正确配置；<br/>4. 数据质量检查：a) 主键冲突检测；b) 无主键表识别；c) 非法字符检测；d) 违反唯一约束检查；e) 数据兼容性（如字段类型、枚举值变更）。 |
-| 优先级     | 高                                                           |
+| 优先级     | 中（影响升级，但非所有版本均需检查）。                       |
 | 前置条件   | 1. 数据库连接信息已配置；<br/>2. 目标版本的系统要求已定义；<br/>3. 有权限访问中间件管理接口。 |
 | 功能输入   | 1. 升级前版本号；<br/>2. 升级后版本号；<br/>3. 局点信息(局点ID)；<br/>4. 环境变量；<br/>5. 切点信息。 |
 | 功能输出   | 1. 检查结果：a) 通过：所有检查项均符合要求；b) 警告：部分检查项超出阈值，但可继续升级（如记录日志）；c) 失败：关键检查项不通过（如主键冲突、中间件版本过低），终止升级。<br>2. 报告示例：[FT前置业务检查报告]<br>  1. 检查项: 中间件版本检查<br>    - 结果: 失败（MySQL版本5.6.35不满足最低要求5.7.0）<br>    - 建议: 升级MySQL至5.7.0或更高版本<br>  2. 检查项: ZooKeeper磁盘挂载检查<br>    - 结果: 警告（ZooKeeper数据目录与系统目录共用磁盘）<br>    - 建议: 为ZooKeeper配置独立的数据磁盘<br>  3. 检查项: 主键冲突检测<br>    - 结果: 失败（发现15条冲突记录，阈值0）<br>    - 建议: 执行 `SELECT * FROM orders WHERE id IN (SELECT id FROM orders GROUP BY id HAVING COUNT(*) > 1);` 查看冲突记录<br>  4. 检查项: 无主键表检测<br>    - 结果: 警告（发现3张无主键表）<br>    - 建议: 为表 user_logs, temp_data, audit_records 添加主键 |
@@ -242,6 +372,7 @@ FT团队需实现以下5个核心CICD切点：
 | 补充说明   | 1. 备份数据需定期清理，保留最近3次升级的备份；<br/>2. 配置文件变更需记录版本历史。 |
 
 ### 3. 启动前处理
+
 | 原因和动机 | 确保FT业务系统新版本启动前的数据和配置准备就绪，避免启动失败。 |
 | ---------- | ------------------------------------------------------------ |
 | 功能描述   | 执行FT业务系统最主要的升级处理操作，包括：<br/>1. **多数据库SQL执行**：支持同时连接FT数据库和中台数据库，执行不兼容SQL脚本；<br/>2. **逐条SQL执行与日志记录**：一个SQL文件包含多条SQL语句时，逐条执行并记录每条SQL的执行状态、耗时、影响行数等详细信息；<br/>3. **断点续执行机制**：当某条SQL执行失败时，手动处理问题后可从失败的SQL语句开始继续执行，避免重复执行已成功的SQL；<br/>4. **数据结构变更**：创建新表、迁移数据、重命名表等操作；<br/>5. **业务数据迁移**：按照迁移规则转换数据；<br/>6. **配置文件更新**：替换新版本配置文件。 |
@@ -253,9 +384,10 @@ FT团队需实现以下5个核心CICD切点：
 | 异常流程   | 1. **数据库连接失败**：<br/>   a) 记录连接失败的数据库信息；<br/>   b) 重试连接（最多3次）；<br/>   c) 若仍失败，终止升级并通知管理员。<br/>2. **SQL执行失败**：<br/>   a) 记录失败的SQL语句、错误信息、错误代码；<br/>   b) 保存断点信息（文件名、行号、SQL内容）；<br/>   c) 中断升级流程；<br/>   d) 通知管理员进行人工处理；<br/>   e) 人工处理完成后，可调用断点续执行接口继续。<br/>3. **SQL解析失败**：<br/>   a) 记录解析失败的文件名和位置；<br/>   b) 终止升级并通知管理员检查SQL文件格式。<br/>4. **数据迁移失败**：<br/>   a) 记录失败记录的详细信息；<br/>   b) 保存断点信息；<br/>   c) 执行回滚操作（如果支持）。<br/>5. **跨数据库事务失败**：<br/>   a) 回滚所有相关数据库的事务；<br/>   b) 记录事务失败的详细信息；<br/>   c) 恢复到执行前状态。 |
 | 性能指标   | 1. 启动前处理需在30分钟内完成（数据量百万级）；<br/>2. 单条SQL执行超时时间 ≤ 5分钟；<br/>3. SQL执行日志记录延迟 ≤ 1秒；<br/>4. 断点信息保存时间 ≤ 3秒。 |
 | 约束条件   | 1. 所有SQL脚本需提前在测试环境验证通过；<br/>2. 数据迁移需保证数据一致性；<br/>3. 升级过程中需记录详细日志，便于问题排查；<br/>4. **SQL文件格式要求**：<br/>   - 每条SQL语句以分号结尾<br/>   - 支持多行SQL语句<br/>   - 通过注释标识目标数据库（如：-- @database: ft_db）<br/>   - 文件编码必须为UTF-8<br/>5. **多数据库连接管理**：<br/>   - 每个数据库连接需配置独立的连接池<br/>   - 支持事务管理和回滚<br/>   - 连接超时和重试机制<br/>6. **断点续执行限制**：<br/>   - 断点信息保留7天<br/>   - 同一升级任务最多支持10次断点续执行<br/>   - 续执行前需验证数据库状态一致性。 |
-| 补充说明   | 1. **SQL执行日志格式示例**：<br/>```<br/>[2024-01-01 10:00:01] 文件: upgrade_v3.17.5.sql, 行号: 15<br/>SQL: ALTER TABLE orders ADD COLUMN status_new VARCHAR(20);<br/>数据库: ft_db<br/>执行状态: 成功<br/>耗时: 1.2秒<br/>影响行数: 0<br/>```<br/>2. **断点信息格式示例**：<br/>```<br/>断点ID: BP_20240101_100001<br/>执行ID: EXEC_20240101_100000<br/>失败位置: upgrade_v3.17.5.sql:25<br/>失败SQL: INSERT INTO user_permissions SELECT * FROM temp_permissions;<br/>错误信息: Duplicate entry '1001' for key 'PRIMARY'<br/>保存时间: 2024-01-01 10:00:15<br/>```<br/>3. **多数据库配置示例**：<br/>```<br/>ft_database:<br/>  host: ft-db.company.com<br/>  port: 3306<br/>  database: ft_production<br/>  username: ft_user<br/>  password: encrypted_password<br/>  <br/>platform_database:<br/>  host: platform-db.company.com<br/>  port: 3306<br/>  database: platform_production<br/>  username: platform_user<br/>  password: encrypted_password<br/>```<br/>4. 升级脚本需按顺序执行，并有明确的依赖关系；<br/>5. 大数据量迁移可考虑分批处理；<br/>6. 升级前需备份关键数据；<br/>7. 支持SQL执行的并行度配置，但需确保数据一致性。 |
+| 补充说明   | 1. **SQL执行日志格式示例**：<br/>[2024-01-01 10:00:01] 文件: upgrade_v3.17.5.sql, 行号: 15<br/>SQL: ALTER TABLE orders ADD COLUMN status_new VARCHAR(20);<br/>数据库: ft_db<br/>执行状态: 成功<br/>耗时: 1.2秒<br/>影响行数: 0<br/>2. **断点信息格式示例**：<br/>断点ID: BP_20240101_100001<br/>执行ID: EXEC_20240101_100000<br/>失败位置: upgrade_v3.17.5.sql:25<br/>失败SQL: INSERT INTO user_permissions SELECT * FROM temp_permissions;<br/>错误信息: Duplicate entry '1001' for key 'PRIMARY'<br/>保存时间: 2024-01-01 10:00:15<br/>4. 升级脚本需按顺序执行，并有明确的依赖关系；<br/>5. 大数据量迁移可考虑分批处理；<br/>6. 升级前需备份关键数据；<br/>7. 支持SQL执行的并行度配置，但需确保数据一致性。 |
 
 ### 4. 启动后处理
+
 | 原因和动机 | 完成FT业务系统启动后的初始化工作 |
 | ---------- | ------------------------------------------------------------ |
 | 功能描述   | 执行FT业务系统有组件依赖的升级处理，如导入资源包、缓存重建、索引优化、服务健康检查等。 |
@@ -270,6 +402,7 @@ FT团队需实现以下5个核心CICD切点：
 | 补充说明   | 1. 资源包版本需与系统版本匹配；<br>2. 缓存重建可考虑分批次进行，减少对服务的影响；<br>3. 索引优化前后需收集性能数据，评估优化效果。 |
 
 ### 5. 升级后处理
+
 | 原因和动机 | 清理本次升级产生的缓存文件、备份文件 |
 | ---------- | ------------------------------------------------------------ |
 | 功能描述   | 处理FT业务系统需要持续处理的数据，如数据异步迁移、日志清理、性能优化、资源释放等。 |
@@ -527,72 +660,206 @@ public class UpgradeRequest {
 
 ### 4. 数据模型设计
 
-#### 4.1 执行记录模型
+基于断点续执行和SQL精确定位的需求，重新设计数据模型如下：
 
-一次升级对应一条记录
+#### 4.1 升级执行记录模型
+**用途**：记录一次完整的升级过程，一次升级对应一条记录
+**存储位置**：MySQL/MariaDB
 
 ```java
 @Entity
 @Table(name = "upgrade_execution")
 public class UpgradeExecution {
     @Id
-    private String executionId;
-    private String sourceVersion;
-    private String targetVersion;
-    private String siteId;
-    private String environment;
-    private ExecutionStatus status;
-    private LocalDateTime startTime;
-    private LocalDateTime endTime;
-    private String currentStepId;
-    private String breakpointData;
-    private Integer totalSteps;
-    private Integer completedSteps;
-    private String errorMessage;
+    private String executionId;              // 执行ID（UUID）
+    private String sourceVersion;            // 升级前版本号
+    private String targetVersion;            // 升级后版本号
+    private String siteId;                   // 局点ID
+    private String stepType;                 // 切点类型（pre_business_check等）
+    private String environment;              // 环境信息
+    private ExecutionStatus status;          // 执行状态（PENDING/RUNNING/SUCCESS/FAILED/PAUSED）
+    private LocalDateTime startTime;         // 开始时间
+    private LocalDateTime endTime;           // 结束时间
+    private String currentStepId;            // 当前执行的步骤ID
+    private Integer totalSteps;              // 总步骤数
+    private Integer completedSteps;          // 已完成步骤数
+    private String errorMessage;             // 错误信息
+    private String createdBy;                // 创建者（CICD系统标识）
+    private LocalDateTime createdTime;       // 创建时间
+    private LocalDateTime updatedTime;       // 更新时间
 }
 ```
 
 #### 4.2 切点执行记录模型
-
-一次切点调用对应一条记录
+**用途**：记录每个切点的执行详情，一次切点调用对应一条记录
+**存储位置**：MySQL/MariaDB
 
 ```java
 @Entity
 @Table(name = "step_execution")
 public class StepExecution {
     @Id
-    private String id;
-    private String executionId;
-    private String stepId;
-    private String stepName;
-    private String stepType;
-    private StepStatus status;
-    private LocalDateTime startTime;
-    private LocalDateTime endTime;
-    private Long duration;
-    private String result;
-    private String errorMessage;
-    private String metadata;
+    private String id;                       // 主键ID（UUID）
+    private String executionId;              // 关联的升级执行ID
+    private String stepId;                   // 步骤ID（配置文件中定义）
+    private String stepName;                 // 步骤名称
+    private String stepType;                 // 步骤类型
+    private String className;                // 执行类名
+    private StepStatus status;               // 步骤状态（PENDING/RUNNING/SUCCESS/FAILED/SKIPPED）
+    private LocalDateTime startTime;         // 开始时间
+    private LocalDateTime endTime;           // 结束时间
+    private Long duration;                   // 执行耗时（毫秒）
+    private String result;                   // 执行结果（JSON格式）
+    private String errorMessage;             // 错误信息
+    private String metadata;                 // 元数据（JSON格式，包含执行参数等）
+    private Integer retryCount;              // 重试次数
+    private Integer executionOrder;          // 执行顺序
+    private LocalDateTime createdTime;       // 创建时间
+    private LocalDateTime updatedTime;       // 更新时间
 }
 ```
 
-#### 4.3 配置文件元数据模型
+#### 4.3 SQL执行记录模型
+**用途**：记录SQL脚本中每条SQL语句的执行详情，支持精确的断点续执行
+**存储位置**：MySQL/MariaDB
 
 ```java
 @Entity
-@Table(name = "upgrade_configuration")
-public class UpgradeConfigurationMeta {
+@Table(name = "sql_execution_record")
+public class SqlExecutionRecord {
     @Id
-    private String version;
-    private String description;
-    private String configPath;
-    private String checksum;
-    private LocalDateTime createdTime;
-    private LocalDateTime lastModified;
-    private Boolean isActive;
-    private String createdBy;
+    private String id;                       // 主键ID（UUID）
+    private String executionId;              // 关联的升级执行ID
+    private String stepId;                   // 关联的步骤ID
+    private String sqlFileId;                // SQL文件标识（文件名+版本号的MD5）
+    private String sqlFileName;              // SQL文件名
+    private Integer sqlLineNumber;           // SQL语句在文件中的行号
+    private Integer sqlSequence;             // SQL语句在文件中的序号（第几条SQL）
+    private String sqlContent;               // SQL语句内容（完整SQL）
+    private String sqlContentHash;           // SQL内容的MD5哈希值
+    private String targetDatabase;           // 目标数据库标识
+    private SqlStatus status;                // SQL执行状态（PENDING/RUNNING/SUCCESS/FAILED/SKIPPED）
+    private LocalDateTime startTime;         // 开始执行时间
+    private LocalDateTime endTime;           // 结束执行时间
+    private Long duration;                   // 执行耗时（毫秒）
+    private Integer affectedRows;            // 影响行数
+    private String errorCode;                // 错误代码
+    private String errorMessage;             // 错误信息
+    private String executionResult;          // 执行结果详情
+    private Integer retryCount;              // 重试次数
+    private LocalDateTime createdTime;       // 创建时间
+    private LocalDateTime updatedTime;       // 更新时间
 }
 ```
+
+#### 4.4 断点信息模型
+**用途**：记录升级过程中的断点信息，支持从任意位置续执行
+**存储位置**：MySQL/MariaDB
+
+```java
+@Entity
+@Table(name = "upgrade_breakpoint")
+public class UpgradeBreakpoint {
+    @Id
+    private String id;                       // 主键ID（UUID）
+    private String executionId;              // 关联的升级执行ID
+    private String stepId;                   // 中断时的步骤ID
+    private String sqlFileId;                // 中断时的SQL文件ID（如果适用）
+    private Integer sqlSequence;             // 中断时的SQL序号（如果适用）
+    private String breakpointType;           // 断点类型（STEP_LEVEL/SQL_LEVEL）
+    private String contextData;              // 执行上下文数据（JSON格式）
+    private String failureReason;            // 中断原因
+    private String resumeInstructions;       // 续执行指导说明
+    private BreakpointStatus status;         // 断点状态（ACTIVE/RESOLVED/EXPIRED）
+    private LocalDateTime breakpointTime;    // 断点产生时间
+    private LocalDateTime expiryTime;        // 断点过期时间
+    private String resolvedBy;               // 处理人员
+    private LocalDateTime resolvedTime;      // 处理时间
+    private String resolveNotes;             // 处理说明
+    private LocalDateTime createdTime;       // 创建时间
+    private LocalDateTime updatedTime;       // 更新时间
+}
+```
+
+#### 4.5 升级报告模型
+
+**用途**：生成和存储升级执行报告，提供统计分析数据
+**存储位置**：MySQL/MariaDB
+
+```java
+@Entity
+@Table(name = "upgrade_report")
+public class UpgradeReport {
+    @Id
+    private String id;                       // 主键ID（UUID）
+    private String executionId;              // 关联的升级执行ID
+    private String reportType;               // 报告类型（SUMMARY/DETAILED/ERROR_ANALYSIS）
+    private String sourceVersion;            // 升级前版本
+    private String targetVersion;            // 升级后版本
+    private String siteId;                   // 局点ID
+    private String stepType;                 // 切点类型
+    private ReportStatus status;             // 报告状态（GENERATED/ARCHIVED）
+    private Integer totalSteps;              // 总步骤数
+    private Integer successSteps;            // 成功步骤数
+    private Integer failedSteps;             // 失败步骤数
+    private Integer skippedSteps;            // 跳过步骤数
+    private Integer totalSqlCount;           // 总SQL数量
+    private Integer successSqlCount;         // 成功SQL数量
+    private Integer failedSqlCount;          // 失败SQL数量
+    private Long totalDuration;              // 总耗时（毫秒）
+    private String reportContent;            // 报告内容（JSON格式）
+    private String summary;                  // 执行摘要
+    private String recommendations;          // 建议和改进点
+    private LocalDateTime generatedTime;     // 报告生成时间
+    private LocalDateTime createdTime;       // 创建时间
+    private LocalDateTime updatedTime;       // 更新时间
+}
+```
+
+#### 4.6 数据模型关系图
+
+```
+UpgradeExecution (1) -----> StepExecution(N) -----> StepExecutionRecord (N) -----> SqlExecutionRecord (N)
+       |                           
+       |                           
+       v                           
+UpgradeBreakpoint (1)      
+       |                           
+       |                           
+       v                           
+UpgradeReport (1)          
+```
+
+#### 4.8 索引设计
+
+**upgrade_execution表索引**：
+
+- PRIMARY KEY (execution_id)
+- INDEX idx_version_site (source_version, target_version, site_id)
+- INDEX idx_status_time (status, created_time)
+- INDEX idx_step_type (step_type)
+
+**step_execution表索引**：
+- PRIMARY KEY (id)
+- INDEX idx_execution_id (execution_id)
+- INDEX idx_step_status (step_id, status)
+- INDEX idx_execution_order (execution_id, execution_order)
+
+**sql_execution_record表索引**：
+- PRIMARY KEY (id)
+- INDEX idx_execution_step (execution_id, step_id)
+- INDEX idx_sql_file_seq (sql_file_id, sql_sequence)
+- INDEX idx_status_time (status, created_time)
+- UNIQUE INDEX uk_sql_content (execution_id, step_id, sql_content_hash)
+
+**upgrade_breakpoint表索引**：
+- PRIMARY KEY (id)
+- UNIQUE INDEX uk_execution_active (execution_id, status) WHERE status = 'ACTIVE'
+- INDEX idx_status_time (status, breakpoint_time)
+
+#### 4.9 数据保留策略
+
+数据量不大，默认无需清理
 
 ### 5. 关键技术实现
 
@@ -640,29 +907,6 @@ public class BreakpointManager {
 }
 ```
 
-#### 5.3 分布式锁机制
-```java
-@Component
-public class DistributedLockManager {
-    
-    @Autowired
-    private RedisTemplate<String, String> redisTemplate;
-    
-    public boolean acquireLock(String lockKey, String lockValue, long expireTime) {
-        Boolean result = redisTemplate.opsForValue()
-            .setIfAbsent(lockKey, lockValue, Duration.ofMillis(expireTime));
-        return Boolean.TRUE.equals(result);
-    }
-    
-    public void releaseLock(String lockKey, String lockValue) {
-        String script = "if redis.call('get', KEYS[1]) == ARGV[1] then " +
-                       "return redis.call('del', KEYS[1]) else return 0 end";
-        redisTemplate.execute(new DefaultRedisScript<>(script, Long.class), 
-                             Collections.singletonList(lockKey), lockValue);
-    }
-}
-```
-
 ### 6. 性能优化设计
 
 #### 6.1 异步执行优化
@@ -686,126 +930,6 @@ public class AsyncUpgradeExecutor {
         executor.setThreadNamePrefix("upgrade-executor-");
         executor.initialize();
         return executor;
-    }
-}
-```
-
-#### 6.2 缓存优化
-```java
-@Service
-public class CachedConfigurationService {
-    
-    @Cacheable(value = "upgrade-config", key = "#version")
-    public UpgradeConfiguration getConfiguration(String version) {
-        return configurationRepository.findByVersion(version);
-    }
-    
-    @CacheEvict(value = "upgrade-config", key = "#version")
-    public void evictConfiguration(String version) {
-        // 清除缓存
-    }
-}
-```
-
-### 7. 监控与告警设计
-
-#### 7.1 监控指标
-```java
-@Component
-public class UpgradeMetrics {
-    
-    private final MeterRegistry meterRegistry;
-    private final Counter upgradeCounter;
-    private final Timer upgradeTimer;
-    private final Gauge activeUpgrades;
-    
-    public UpgradeMetrics(MeterRegistry meterRegistry) {
-        this.meterRegistry = meterRegistry;
-        this.upgradeCounter = Counter.builder("upgrade.executions.total")
-            .description("Total number of upgrade executions")
-            .register(meterRegistry);
-        this.upgradeTimer = Timer.builder("upgrade.execution.duration")
-            .description("Upgrade execution duration")
-            .register(meterRegistry);
-        this.activeUpgrades = Gauge.builder("upgrade.active.count")
-            .description("Number of active upgrades")
-            .register(meterRegistry, this, UpgradeMetrics::getActiveUpgradeCount);
-    }
-    
-    public void recordUpgradeExecution(ExecutionResult result) {
-        upgradeCounter.increment(
-            Tags.of(
-                "status", result.getStatus().name(),
-                "version", result.getTargetVersion()
-            )
-        );
-    }
-}
-```
-
-#### 7.2 告警规则
-```yaml
-# Prometheus告警规则
-groups:
-  - name: ft-auto-upgrade
-    rules:
-      - alert: UpgradeExecutionFailed
-        expr: increase(upgrade_executions_total{status="FAILED"}[5m]) > 0
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "升级执行失败"
-          description: "在过去5分钟内有升级执行失败"
-      
-      - alert: UpgradeExecutionTimeout
-        expr: upgrade_execution_duration > 3600
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: "升级执行超时"
-          description: "升级执行时间超过1小时"
-```
-
-### 8. 安全设计
-
-#### 8.1 API安全
-```java
-@Configuration
-@EnableWebSecurity
-public class SecurityConfig {
-    
-    @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http
-            .authorizeHttpRequests(authz -> authz
-                .requestMatchers("/api/v1/upgrade/**").hasRole("UPGRADE_ADMIN")
-                .requestMatchers("/actuator/health").permitAll()
-                .anyRequest().authenticated()
-            )
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
-        return http.build();
-    }
-}
-```
-
-#### 8.2 数据加密
-```java
-@Component
-public class DataEncryption {
-    
-    @Value("${app.encryption.key}")
-    private String encryptionKey;
-    
-    public String encrypt(String data) {
-        // 使用AES加密敏感数据
-        return AESUtil.encrypt(data, encryptionKey);
-    }
-    
-    public String decrypt(String encryptedData) {
-        // 解密数据
-        return AESUtil.decrypt(encryptedData, encryptionKey);
     }
 }
 ```
@@ -870,49 +994,7 @@ class UpgradeIntegrationTest {
 
 ### 10. 部署方案
 
-#### 10.1 Docker化部署
-```dockerfile
-FROM openjdk:11-jre-slim
-
-COPY target/ft-auto-upgrade-*.jar app.jar
-
-EXPOSE 8080
-
-ENTRYPOINT ["java", "-jar", "/app.jar"]
-```
-
-#### 10.2 Kubernetes部署
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ft-auto-upgrade
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: ft-auto-upgrade
-  template:
-    metadata:
-      labels:
-        app: ft-auto-upgrade
-    spec:
-      containers:
-      - name: ft-auto-upgrade
-        image: ft-auto-upgrade:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: SPRING_PROFILES_ACTIVE
-          value: "prod"
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "500m"
-          limits:
-            memory: "1Gi"
-            cpu: "1000m"
-```
+由CICD完成部署、升级、启停，每个局点部署一个实例
 
 ### 11. 运维方案
 
@@ -1002,10 +1084,7 @@ public class UpgradeHealthIndicator implements HealthIndicator {
 ```yaml
 logging:
   level:
-    com.ft.upgrade: DEBUG
-    org.springframework: INFO
-    org.springframework.web: DEBUG
-    org.springframework.security: DEBUG
+    com.ft.upgrade: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
     file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
@@ -1025,7 +1104,7 @@ logging:
 ```yaml
 # application.yml
 server:
-  port: 8080
+  port: 20080
   servlet:
     context-path: /ft-auto-upgrade
 
@@ -1047,10 +1126,6 @@ spring:
       idle-timeout: 600000
       max-lifetime: 1800000
   
-  data:
-    mongodb:
-      uri: mongodb://${MONGO_HOST:localhost}:${MONGO_PORT:27017}/${MONGO_DB:ft_upgrade_logs}
-  
   redis:
     host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
@@ -1062,13 +1137,6 @@ spring:
         max-active: 20
         max-idle: 10
         min-idle: 5
-
-  rabbitmq:
-    host: ${RABBITMQ_HOST:localhost}
-    port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USERNAME:guest}
-    password: ${RABBITMQ_PASSWORD:guest}
-    virtual-host: ${RABBITMQ_VHOST:/}
 
 # 自定义配置
 ft:
@@ -1083,24 +1151,12 @@ ft:
     storage:
       log-retention-days: ${LOG_RETENTION_DAYS:30}
       report-retention-days: ${REPORT_RETENTION_DAYS:90}
-
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,metrics,prometheus
-  endpoint:
-    health:
-      show-details: always
-  metrics:
-    export:
-      prometheus:
-        enabled: true
 ```
 
 ### 12. 错误处理与异常管理
 
 #### 12.1 全局异常处理
+
 ```java
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -1181,106 +1237,6 @@ public class ConfigurationNotFoundException extends RuntimeException {
 public class ValidationException extends RuntimeException {
     public ValidationException(String message) {
         super(message);
-    }
-}
-```
-
-### 13. 数据备份与恢复策略
-
-#### 13.1 数据备份服务
-```java
-@Service
-public class BackupService {
-    
-    private static final Logger logger = LoggerFactory.getLogger(BackupService.class);
-    
-    @Autowired
-    private DataSource dataSource;
-    
-    @Value("${ft.upgrade.backup.path}")
-    private String backupPath;
-    
-    public BackupResult createBackup(String executionId, List<String> tables) {
-        String backupDir = backupPath + "/" + executionId;
-        File dir = new File(backupDir);
-        if (!dir.exists()) {
-            dir.mkdirs();
-        }
-        
-        BackupResult result = new BackupResult();
-        result.setExecutionId(executionId);
-        result.setBackupPath(backupDir);
-        result.setStartTime(LocalDateTime.now());
-        
-        try {
-            for (String table : tables) {
-                backupTable(table, backupDir);
-                result.addBackupTable(table);
-            }
-            result.setStatus(BackupStatus.SUCCESS);
-            result.setEndTime(LocalDateTime.now());
-            logger.info("备份完成: executionId={}, tables={}", executionId, tables);
-        } catch (Exception e) {
-            result.setStatus(BackupStatus.FAILED);
-            result.setErrorMessage(e.getMessage());
-            result.setEndTime(LocalDateTime.now());
-            logger.error("备份失败: executionId=" + executionId, e);
-        }
-        
-        return result;
-    }
-    
-    private void backupTable(String tableName, String backupDir) throws Exception {
-        String backupFile = backupDir + "/" + tableName + "_" + 
-                           LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".sql";
-        
-        String command = String.format(
-            "mysqldump -h%s -P%s -u%s -p%s %s %s > %s",
-            getDbHost(), getDbPort(), getDbUsername(), getDbPassword(),
-            getDbName(), tableName, backupFile
-        );
-        
-        Process process = Runtime.getRuntime().exec(command);
-        int exitCode = process.waitFor();
-        
-        if (exitCode != 0) {
-            throw new RuntimeException("备份表失败: " + tableName + ", 退出码: " + exitCode);
-        }
-    }
-    
-    public RestoreResult restoreBackup(String executionId) {
-        String backupDir = backupPath + "/" + executionId;
-        RestoreResult result = new RestoreResult();
-        result.setExecutionId(executionId);
-        result.setStartTime(LocalDateTime.now());
-        
-        try {
-            File dir = new File(backupDir);
-            if (!dir.exists()) {
-                throw new RuntimeException("备份目录不存在: " + backupDir);
-            }
-            
-            File[] backupFiles = dir.listFiles((d, name) -> name.endsWith(".sql"));
-            if (backupFiles == null || backupFiles.length == 0) {
-                throw new RuntimeException("备份文件不存在");
-            }
-            
-            for (File backupFile : backupFiles) {
-                restoreFromFile(backupFile);
-                result.addRestoredTable(extractTableName(backupFile.getName()));
-            }
-            
-            result.setStatus(RestoreStatus.SUCCESS);
-            result.setEndTime(LocalDateTime.now());
-            logger.info("恢复完成: executionId={}", executionId);
-        } catch (Exception e) {
-            result.setStatus(RestoreStatus.FAILED);
-            result.setErrorMessage(e.getMessage());
-            result.setEndTime(LocalDateTime.now());
-            logger.error("恢复失败: executionId=" + executionId, e);
-        }
-        
-        return result;
     }
 }
 ```
@@ -1464,38 +1420,6 @@ public class PreBusinessCheckStep extends AbstractUpgradeStep {
 
 ### 15. 最佳实践与开发规范
 
-#### 15.1 代码规范
-```java
-/**
- * 升级切点开发规范
- * 
- * 1. 命名规范：
- *    - 类名：以Step结尾，如PreBusinessCheckStep
- *    - 方法名：使用驼峰命名，动词开头
- *    - 变量名：使用驼峰命名，名词性
- * 
- * 2. 日志规范：
- *    - 使用SLF4J Logger
- *    - 关键操作必须记录日志
- *    - 异常必须记录ERROR级别日志
- * 
- * 3. 异常处理：
- *    - 不要吞噬异常
- *    - 使用具体的异常类型
- *    - 提供有意义的错误信息
- * 
- * 4. 资源管理：
- *    - 使用try-with-resources管理资源
- *    - 及时释放数据库连接
- *    - 清理临时文件
- * 
- * 5. 性能考虑：
- *    - 避免在循环中执行数据库操作
- *    - 使用批量操作
- *    - 合理使用缓存
- */
-```
-
 #### 15.2 配置文件最佳实践
 ```json
 {
@@ -1553,37 +1477,3 @@ public class PreBusinessCheckStep extends AbstractUpgradeStep {
 }
 ```
 
-#### 15.3 开发流程规范
-```markdown
-## 升级切点开发流程
-
-### 1. 需求分析
-- 明确升级步骤的具体功能
-- 确定输入输出参数
-- 评估执行时间和资源需求
-
-### 2. 设计阶段
-- 继承AbstractUpgradeStep基类
-- 实现必要的接口方法
-- 设计异常处理策略
-
-### 3. 开发阶段
-- 编写核心业务逻辑
-- 添加详细的日志记录
-- 实现参数验证
-
-### 4. 测试阶段
-- 编写单元测试
-- 进行集成测试
-- 性能测试
-
-### 5. 部署阶段
-- 更新配置文件
-- 部署到测试环境
-- 验证功能正确性
-
-### 6. 文档更新
-- 更新API文档
-- 更新操作手册
-- 记录已知问题
-```
