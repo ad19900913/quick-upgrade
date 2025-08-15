@@ -83,7 +83,6 @@ trap cleanup SIGINT SIGTERM
     if (createTime >= start_ts && createTime < end_ts && taskId != "") {
       # 状态过滤：只保留目标状态
       if (state in target_states_set) {
-        # 输出简化格式: taskId<tab>createTime<tab>state
         printf "%s\t%d\t%d\n", taskId, createTime, state
         state_filtered_count++
       }
