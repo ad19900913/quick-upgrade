@@ -1,0 +1,181 @@
+# FT自动升级服务配置文件
+server:
+  port: 8080
+  servlet:
+    context-path: /ft-auto-upgrade
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: ft-auto-upgrade
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:ft_upgrade}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
+  
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: update
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+        use_sql_comments: true
+  
+  # MongoDB配置
+  data:
+    mongodb:
+      uri: mongodb://${MONGO_HOST:localhost}:${MONGO_PORT:27017}/${MONGO_DB:ft_upgrade_logs}
+      auto-index-creation: true
+  
+  # Redis配置
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    database: ${REDIS_DB:0}
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 20
+        max-idle: 10
+        min-idle: 5
+        max-wait: -1ms
+
+  # RabbitMQ配置
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: ${RABBITMQ_VHOST:/}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000ms
+
+  # 缓存配置
+  cache:
+    type: redis
+    redis:
+      time-to-live: 600000ms
+      cache-null-values: false
+
+# 自定义配置
+ft:
+  upgrade:
+    config:
+      base-path: ${CONFIG_BASE_PATH:/opt/ft-upgrade/config}
+      reload-interval: 60s
+      backup-path: ${BACKUP_PATH:/opt/ft-upgrade/backup}
+    execution:
+      max-concurrent: ${MAX_CONCURRENT:5}
+      timeout: ${EXECUTION_TIMEOUT:3600s}
+      retry-count: ${RETRY_COUNT:3}
+    storage:
+      log-retention-days: ${LOG_RETENTION_DAYS:30}
+      report-retention-days: ${REPORT_RETENTION_DAYS:90}
+    security:
+      encryption-key: ${ENCRYPTION_KEY:ft-upgrade-secret-key-2024}
+
+# 监控配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,loggers
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+      environment: ${spring.profiles.active}
+
+# 日志配置
+logging:
+  level:
+    com.ft.upgrade: DEBUG
+    org.springframework: INFO
+    org.springframework.web: DEBUG
+    org.springframework.security: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{executionId}] [%X{stepId}] %logger{36} - %msg%n"
+  file:
+    name: logs/ft-auto-upgrade.log
+    max-size: 100MB
+    max-history: 30
+    total-size-cap: 1GB
+
+---
+# 开发环境配置
+spring:
+  profiles: dev
+  datasource:
+    url: jdbc:mysql://localhost:3306/ft_upgrade_dev?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/ft_upgrade_logs_dev
+
+ft:
+  upgrade:
+    config:
+      base-path: ./config
+      backup-path: ./backup
+
+logging:
+  level:
+    com.ft.upgrade: DEBUG
+
+---
+# 测试环境配置
+spring:
+  profiles: test
+  datasource:
+    url: jdbc:mysql://test-db:3306/ft_upgrade_test?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+  data:
+    mongodb:
+      uri: mongodb://test-mongo:27017/ft_upgrade_logs_test
+
+---
+# 生产环境配置
+spring:
+  profiles: prod
+  jpa:
+    show-sql: false
+  
+logging:
+  level:
+    com.ft.upgrade: INFO
+    org.springframework: WARN
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
