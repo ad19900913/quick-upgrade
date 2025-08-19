@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 monitor_device_online.py - 监听设备在线状态变化并统计在线设备
+支持后台守护进程运行
 """
 
 import os
@@ -48,23 +49,23 @@ class DeviceMonitor:
         
         # 控制标志
         self.running = False
-        self.kafka_process = None
-        
-        # 设置日志
-        self.setup_logging()
+        self.kafka_processes = []
         
         # 初始化统计数据
         self.init_stats()
     
     def setup_logging(self):
         """设置日志配置"""
+        # 清除现有的handlers
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+        
         logging.basicConfig(
             level=logging.INFO,
             format='[%(asctime)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
             handlers=[
-                logging.FileHandler(self.log_file, encoding='utf-8'),
-                logging.StreamHandler()
+                logging.FileHandler(self.log_file, encoding='utf-8')
             ]
         )
         self.logger = logging.getLogger(__name__)
@@ -112,9 +113,48 @@ class DeviceMonitor:
         """删除PID文件"""
         self.pid_file.unlink(missing_ok=True)
     
+    def daemonize(self):
+        """将进程转为守护进程"""
+        try:
+            # 第一次fork
+            pid = os.fork()
+            if pid > 0:
+                # 父进程退出
+                sys.exit(0)
+        except OSError as e:
+            print(f"第一次fork失败: {e}")
+            sys.exit(1)
+        
+        # 脱离父进程环境
+        os.chdir("/")
+        os.setsid()
+        os.umask(0)
+        
+        try:
+            # 第二次fork
+            pid = os.fork()
+            if pid > 0:
+                # 父进程退出
+                sys.exit(0)
+        except OSError as e:
+            print(f"第二次fork失败: {e}")
+            sys.exit(1)
+        
+        # 重定向标准输入输出
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # 重定向到/dev/null
+        with open('/dev/null', 'r') as f:
+            os.dup2(f.fileno(), sys.stdin.fileno())
+        with open('/dev/null', 'w') as f:
+            os.dup2(f.fileno(), sys.stdout.fileno())
+            os.dup2(f.fileno(), sys.stderr.fileno())
+    
     def signal_handler(self, signum, frame):
         """信号处理器"""
-        self.logger.info(f"收到退出信号 {signum}，正在停止...")
+        if hasattr(self, 'logger'):
+            self.logger.info(f"收到退出信号 {signum}，正在停止...")
         self.stop_monitoring()
     
     def extract_fields(self, message: str) -> Dict[str, str]:
@@ -296,6 +336,8 @@ class DeviceMonitor:
                     bufsize=1
                 )
                 
+                self.kafka_processes.append(process)
+                
                 # 读取并处理消息
                 for line in process.stdout:
                     if not self.running:
@@ -358,11 +400,41 @@ class DeviceMonitor:
             for thread in threads:
                 thread.join(timeout=5)
     
-    def start_monitoring(self):
+    def start_monitoring(self, daemon=True):
         """启动监控"""
         if self.is_running():
             print("设备在线监控器已经在运行中")
             return False
+        
+        if daemon:
+            # 守护进程模式 - 先显示启动信息
+            topic_list = ",".join([topic for topic, _ in self.topics])
+            print("✓ 设备在线监控器正在后台启动")
+            print(f"✓ 日志文件: {self.log_file}")
+            print(f"✓ 输出目录: {self.output_dir}")
+            print("")
+            print("功能说明:")
+            print(f"  - 监听多个主题: {topic_list}")
+            print("  - 统计所有 onlineStatus=ONLINE 的设备")
+            print("  - 按应用ID分别输出到不同文件")
+            print("  - 自动去重设备序列号 (devSn)")
+            print("  - 实时写入到输出文件")
+            print("  - 智能重启机制，持续监控新消息")
+            print("")
+            print("输出文件:")
+            for topic_name, app_id in self.topics:
+                print(f"  - 应用{app_id}: {self.output_dir}/online_devices_{app_id}.txt")
+            print("")
+            print("监控状态检查:")
+            print(f"  使用 'python3 {os.path.basename(sys.argv[0])} status' 查看运行状态")
+            print(f"  使用 'python3 {os.path.basename(sys.argv[0])} show [应用ID]' 查看在线设备列表")
+            print(f"  日志文件: tail -f {self.log_file}")
+            
+            # 转为守护进程
+            self.daemonize()
+        
+        # 设置日志（守护进程模式下重新设置）
+        self.setup_logging()
         
         # 创建输出目录和文件
         self.create_output_files()
@@ -400,16 +472,22 @@ class DeviceMonitor:
         """停止监控"""
         self.running = False
         
-        if self.kafka_process:
+        # 终止所有Kafka进程
+        for process in self.kafka_processes:
             try:
-                self.kafka_process.terminate()
-                self.kafka_process.wait(timeout=5)
+                process.terminate()
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.kafka_process.kill()
-                self.kafka_process.wait()
+                process.kill()
+                process.wait()
+            except Exception:
+                pass
         
+        self.kafka_processes.clear()
         self.remove_pid()
-        self.logger.info("设备在线监控器已停止")
+        
+        if hasattr(self, 'logger'):
+            self.logger.info("设备在线监控器已停止")
     
     def stop(self):
         """停止监控器"""
@@ -421,25 +499,31 @@ class DeviceMonitor:
             with open(self.pid_file, 'r') as f:
                 pid = int(f.read().strip())
             
+            print(f"正在停止设备在线监控器 (PID: {pid})...")
+            
             # 发送TERM信号
             os.kill(pid, signal.SIGTERM)
             
             # 等待进程退出
-            for _ in range(10):
+            for i in range(10):
                 try:
                     os.kill(pid, 0)
                     time.sleep(1)
+                    if i == 4:
+                        print("等待进程退出...")
                 except OSError:
                     break
             else:
                 # 如果进程仍在运行，强制杀死
                 try:
+                    print("强制终止进程...")
                     os.kill(pid, signal.SIGKILL)
+                    time.sleep(1)
                 except OSError:
                     pass
             
             self.remove_pid()
-            print("设备在线监控器已停止")
+            print("✓ 设备在线监控器已停止")
             return True
             
         except (OSError, ValueError) as e:
@@ -541,28 +625,9 @@ def main():
     monitor = DeviceMonitor()
     
     if args.command == 'start':
-        if monitor.start_monitoring():
-            print("✓ 设备在线监控器已启动")
-            print(f"✓ 日志文件: {monitor.log_file}")
-            print(f"✓ 输出目录: {monitor.output_dir}")
-            print("")
-            print("功能说明:")
-            topic_list = ",".join([topic for topic, _ in monitor.topics])
-            print(f"  - 监听多个主题: {topic_list}")
-            print("  - 统计所有 onlineStatus=ONLINE 的设备")
-            print("  - 按应用ID分别输出到不同文件")
-            print("  - 自动去重设备序列号 (devSn)")
-            print("  - 实时写入到输出文件")
-            print("  - 智能重启机制，持续监控新消息")
-            print("")
-            print("输出文件:")
-            for topic_name, app_id in monitor.topics:
-                print(f"  - 应用{app_id}: {monitor.output_dir}/online_devices_{app_id}.txt")
-            print("")
-            print("监控状态检查:")
-            print(f"  使用 'python3 {sys.argv[0]} status' 查看运行状态")
-            print(f"  使用 'python3 {sys.argv[0]} show [应用ID]' 查看在线设备列表")
-            print(f"  日志文件: tail -f {monitor.log_file}")
+        if monitor.start_monitoring(daemon=True):
+            # 守护进程模式下，父进程会在这里退出
+            pass
         else:
             sys.exit(1)
     
