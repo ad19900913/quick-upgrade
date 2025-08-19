@@ -79,7 +79,7 @@ start_monitor() {
     nohup bash -c '
         # 安全退出函数
         cleanup() {
-            echo "[$(date \"+%Y-%m-%d %H:%M:%S\")] 收到退出信号，正在停止..." >> "'"$LOG_FILE"'"
+            echo "[$(date "+%Y-%m-%d %H:%M:%S")] 收到退出信号，正在停止..." >> "'"$LOG_FILE"'"
             [[ -n $KAFKA_PID ]] && kill -TERM $KAFKA_PID 2>/dev/null
             rm -f "'"$PID_FILE"'"
             exit 0
@@ -88,21 +88,24 @@ start_monitor() {
         trap cleanup SIGINT SIGTERM
         
         # 记录启动信息
-        echo "[$(date \"+%Y-%m-%d %H:%M:%S\")] 启动Kafka消费者，主题: '"$TOPIC_LIST"'" >> "'"$LOG_FILE"'"
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] 启动Kafka消费者，主题: '"$TOPIC_LIST"'" >> "'"$LOG_FILE"'"
         
-        # 启动Kafka消费者并处理数据
+        # 启动Kafka消费者并处理数据 - 使用持续运行模式
         while true; do
-            echo "[$(date \"+%Y-%m-%d %H:%M:%S\")] 启动/重启Kafka消费者" >> "'"$LOG_FILE"'"
+            echo "[$(date "+%Y-%m-%d %H:%M:%S")] 启动/重启Kafka消费者" >> "'"$LOG_FILE"'"
             
-            "'"$KAFKA_CLIENT"'" \
+            # 使用stdbuf禁用缓冲，确保实时输出
+            stdbuf -oL -eL "'"$KAFKA_CLIENT"'" \
                 --bootstrap-server "'"$BOOTSTRAP_SERVERS"'" \
                 --topic "'"$TOPIC_LIST"'" \
-                --from-beginning 2>&1 | awk -v output_dir="'"$OUTPUT_DIR"'" \
+                --from-beginning 2>&1 | \
+            stdbuf -oL -eL awk -v output_dir="'"$OUTPUT_DIR"'" \
                    -v output_file="'"$OUTPUT_FILE"'" \
                    -v log_file="'"$LOG_FILE"'" \
                    -v app_id_map="'"$APP_ID_MAP"'" '\''
               BEGIN {
                 processed_count = 0
+                business_msg_count = 0
                 
                 # 解析应用ID映射
                 split(app_id_map, map_pairs, ",")
@@ -135,9 +138,21 @@ start_monitor() {
               {
                 processed_count++
                 
-                # 每1000条消息记录一次日志
-                if (processed_count % 1000 == 0) {
-                  log_msg = sprintf("[%s] 已处理 %d 条消息", strftime("%Y-%m-%d %H:%M:%S"), processed_count)
+                # 跳过Kafka系统消息和非JSON消息
+                if ($0 ~ /^Processed a total of/ || $0 ~ /^WARNING/ || $0 ~ /^INFO/ || 
+                    $0 ~ /^ERROR/ || $0 ~ /^\[/ || $0 !~ /\{.*\}/) {
+                  if (processed_count <= 20) {
+                    printf "[%s] 跳过系统消息%d: %.100s\n", strftime("%Y-%m-%d %H:%M:%S"), processed_count, $0 >> log_file
+                    fflush(log_file)
+                  }
+                  next
+                }
+                
+                business_msg_count++
+                
+                # 每100条业务消息记录一次日志
+                if (business_msg_count % 100 == 0) {
+                  log_msg = sprintf("[%s] 已处理 %d 条业务消息", strftime("%Y-%m-%d %H:%M:%S"), business_msg_count)
                   for (app_id in online_count) {
                     log_msg = log_msg sprintf(", 应用%s - 在线:%d 离线:%d 去重设备:%d", 
                                             app_id, online_count[app_id], offline_count[app_id], 
@@ -185,10 +200,10 @@ start_monitor() {
                   app_id = "10001"
                 }
                 
-                # 调试信息：记录解析结果（仅前10条消息）
-                if (processed_count <= 10) {
-                  printf "[%s] 调试 - 消息%d: devSn=%s, status=%s, app_id=%s\n", 
-                         strftime("%Y-%m-%d %H:%M:%S"), processed_count, devSn, onlineStatus, app_id >> log_file
+                # 调试信息：记录解析结果（仅前10条业务消息）
+                if (business_msg_count <= 10) {
+                  printf "[%s] 调试 - 业务消息%d: devSn=%s, status=%s, app_id=%s\n", 
+                         strftime("%Y-%m-%d %H:%M:%S"), business_msg_count, devSn, onlineStatus, app_id >> log_file
                   fflush(log_file)
                 }
                 
@@ -230,18 +245,18 @@ start_monitor() {
                     fflush(log_file)
                   }
                 } else {
-                  # 记录无效消息用于调试（仅前20条）
-                  if (processed_count <= 20) {
-                    printf "[%s] 跳过无效消息%d: 原始内容前100字符: %.100s\n", 
-                           strftime("%Y-%m-%d %H:%M:%S"), processed_count, $0 >> log_file
+                  # 记录无效业务消息用于调试（仅前20条）
+                  if (business_msg_count <= 20) {
+                    printf "[%s] 跳过无效业务消息%d: 原始内容前100字符: %.100s\n", 
+                           strftime("%Y-%m-%d %H:%M:%S"), business_msg_count, $0 >> log_file
                     fflush(log_file)
                   }
                 }
               }
               
               END {
-                printf "[%s] Kafka消费者结束 - 总处理: %d 条消息\n", 
-                       strftime("%Y-%m-%d %H:%M:%S"), processed_count >> log_file
+                printf "[%s] Kafka消费者结束 - 总处理: %d 条消息，业务消息: %d 条\n", 
+                       strftime("%Y-%m-%d %H:%M:%S"), processed_count, business_msg_count >> log_file
                 
                 # 为每个应用写入最终统计
                 for (app_id in online_count) {
@@ -265,14 +280,23 @@ start_monitor() {
               }
             '\''
             
-            # 如果Kafka消费者退出，等待5秒后重启
-            echo "[$(date \"+%Y-%m-%d %H:%M:%S\")] Kafka消费者退出，5秒后重启..." >> "'"$LOG_FILE"'"
-            sleep 5
+            # 记录退出原因并等待重启
+            exit_code=$?
+            echo "[$(date "+%Y-%m-%d %H:%M:%S")] Kafka消费者退出 (退出码: $exit_code)，等待10秒后重启..." >> "'"$LOG_FILE"'"
+            
+            # 如果是正常退出（没有更多消息），等待更长时间
+            if [ $exit_code -eq 0 ]; then
+                echo "[$(date "+%Y-%m-%d %H:%M:%S")] 正常退出，等待30秒后重启以监听新消息..." >> "'"$LOG_FILE"'"
+                sleep 30
+            else
+                echo "[$(date "+%Y-%m-%d %H:%M:%S")] 异常退出，等待10秒后重启..." >> "'"$LOG_FILE"'"
+                sleep 10
+            fi
         done &
         
         # 保存主进程PID
         echo $! > "'"$PID_FILE"'"
-        echo "[$(date \"+%Y-%m-%d %H:%M:%S\")] 监控进程已启动 (PID: $!)" >> "'"$LOG_FILE"'"
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] 监控进程已启动 (PID: $!)" >> "'"$LOG_FILE"'"
         
         # 等待子进程
         wait
@@ -296,7 +320,7 @@ start_monitor() {
             echo "  - 按应用ID分别输出到不同文件"
             echo "  - 自动去重设备序列号 (devSn)"
             echo "  - 实时写入到输出文件"
-            echo "  - 自动重启机制，确保持续监控"
+            echo "  - 智能重启机制，持续监控新消息"
             echo ""
             echo "输出文件:"
             for topic_config in "${TOPICS[@]}"; do
@@ -479,7 +503,7 @@ case "$1" in
         echo "  - 自动去重设备序列号 (devSn)"
         echo "  - 实时写入到输出文件"
         echo "  - 从头开始消费所有历史消息"
-        echo "  - 自动重启机制，确保持续监控"
+        echo "  - 智能重启机制，持续监控新消息"
         echo ""
         echo "输出文件:"
         echo "  - 应用10001: device_online_output/online_devices_10001.txt"
